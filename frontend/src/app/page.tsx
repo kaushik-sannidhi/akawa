@@ -46,9 +46,8 @@ const ScrambleText = ({ text, delay = 0, durationMultiplier = 1, className = "" 
     }, [text, delay, durationMultiplier]);
 
     return (
-        <span className={`inline-block relative whitespace-nowrap ${className}`}>
-            <span className="opacity-0 pointer-events-none select-none">{text}</span>
-            <span className="absolute top-0 left-0 bottom-0 whitespace-nowrap font-mono">{displayText || " "}</span>
+        <span className={`inline-block font-mono ${className}`}>
+            {displayText || " "}
         </span>
     );
 };
@@ -145,11 +144,13 @@ const USThreatMap = () => {
                                     cy={node.cy}
                                     r={isActive ? 10 : 5}
                                     fill={isActive ? "var(--color-alert)" : "var(--color-iron)"}
+                                    className="transition-all duration-300"
+                                    style={{ r: isActive ? 'clamp(10px, 2vw, 15px)' : 'clamp(5px, 1vw, 8px)' }}
                                 />
                                 {isActive && (
                                     <>
                                         <line x1={node.cx} y1={node.cy} x2={node.cx + 60} y2={node.cy - 50} stroke="var(--color-alert)" strokeWidth="2" opacity="0.5" />
-                                        <text x={node.cx + 66} y={node.cy - 44} fill="var(--color-alert)" fontSize="22" fontFamily="monospace" fontWeight="bold">
+                                        <text x={node.cx + 66} y={node.cy - 44} fill="var(--color-alert)" fontSize="22" fontFamily="monospace" fontWeight="bold" className="text-[32px] sm:text-[22px]">
                                             [{node.name}]
                                         </text>
                                     </>
@@ -370,7 +371,7 @@ export default function LandingPage() {
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.5)_1px,transparent_1px)] bg-[size:32px_32px] opacity-20 pointer-events-none" />
 
                         <div className="relative z-10 mix-blend-difference animate-slide-in-bottom">
-                            <h1 className="text-[3.5rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-8 text-[var(--color-data)] tracking-tighter whitespace-nowrap overflow-visible animate-float-subtle-large">
+                            <h1 className="text-[2.8rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-8 text-[var(--color-data)] tracking-tighter overflow-hidden animate-float-subtle-large break-all sm:break-normal">
                                 <ScrambleText text="ABSOLUTE" delay={500} /><br />
                                 <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="VIGILANCE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
                             </h1>
@@ -443,7 +444,7 @@ export default function LandingPage() {
                         <span className="font-mono text-[10px] px-2 py-1 border border-[var(--color-iron)] bg-[var(--color-void)] hidden md:inline-block">ROTATION_ENABLED</span>
                     </div>
 
-                    <div className="aspect-[21/9] min-h-[300px] md:min-h-[500px] w-full bg-[#050505] relative overflow-hidden flex items-center justify-center p-8">
+                    <div className="aspect-video sm:aspect-[21/9] min-h-[300px] md:min-h-[500px] w-full bg-[#050505] relative overflow-hidden flex items-center justify-center p-8">
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.8)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.8)_1px,transparent_1px)] bg-[size:60px_60px] z-0 opacity-40" />
                         <div className="absolute inset-0 terminal-overlay z-20 pointer-events-none mix-blend-overlay" />
 
@@ -579,8 +580,8 @@ export default function LandingPage() {
                                 <span>[ KINETIC_THREAT ]</span>
                             </div>
                             <h3 className="text-3xl md:text-5xl font-bold text-[var(--color-data)] uppercase group-hover:text-black leading-none break-words shrink-0 relative z-10 transition-transform duration-500 origin-left">Weapon<br />Detection</h3>
-                            {/* Inner detailed text only visible when expanded */}
-                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-0 group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
+                            {/* Inner detailed text only visible when expanded or on mobile */}
+                            <p className="font-mono text-sm font-bold opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-500 mt-2 lg:mt-0 lg:group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
                                 CLASSIFIES 87+ FIREARM TYPES IN UNDER 12MS. <br />ZERO FALSE-POSITIVE TOLERANCE PROTOCOL ACTIVE.
                             </p>
                         </div>
@@ -591,8 +592,8 @@ export default function LandingPage() {
                                 <span>[ HOSTILE_KINEMATICS ]</span>
                             </div>
                             <h3 className="text-3xl md:text-5xl font-bold text-[var(--color-data)] uppercase group-hover:text-black leading-none break-words shrink-0 relative z-10 transition-transform duration-500 origin-left">Attack<br />Stances</h3>
-                            {/* Inner detailed text only visible when expanded */}
-                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-0 group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
+                            {/* Inner detailed text only visible when expanded or on mobile */}
+                            <p className="font-mono text-sm font-bold opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-500 mt-2 lg:mt-0 lg:group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
                                 MULTI-POINT SKELETAL INFERENCE TRACKS HOSTILE WIND-UP, <br />LUNGES, AND AGGRESSIVE VECTOR APPROACHES.
                             </p>
                         </div>
@@ -603,8 +604,8 @@ export default function LandingPage() {
                                 <span>[ BIOMETRIC_EVENT ]</span>
                             </div>
                             <h3 className="text-3xl md:text-5xl font-bold text-[var(--color-silica)] uppercase group-hover:text-black leading-none break-words shrink-0 relative z-10 transition-transform duration-500 origin-left">Medical<br />Emergencies</h3>
-                            {/* Inner detailed text only visible when expanded */}
-                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-0 group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
+                            {/* Inner detailed text only visible when expanded or on mobile */}
+                            <p className="font-mono text-sm font-bold opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity duration-500 mt-2 lg:mt-0 lg:group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
                                 SUDDEN COLLAPSE DETECTION, ERRATIC GAIT ANALYSIS, <br />AND PROLONGED IMMOBILITY TRIGGERS.
                             </p>
                         </div>
@@ -692,7 +693,7 @@ export default function LandingPage() {
                                     & INTEGRATIONS
                                 </span>
                             </h2>
-                            <div className="w-full h-48 border-[2px] border-[var(--color-iron)] bg-[var(--color-void)] relative p-4 flex flex-col justify-between overflow-hidden group hover:border-[var(--color-data)] transition-colors cursor-crosshair">
+                            <div className="w-full h-64 sm:h-48 border-[2px] border-[var(--color-iron)] bg-[var(--color-void)] relative p-4 flex flex-col justify-between overflow-hidden group hover:border-[var(--color-data)] transition-colors cursor-crosshair">
                                 <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.5)_1px,transparent_1px)] bg-[size:16px_16px] pointer-events-none opacity-20 group-hover:opacity-50 transition-opacity" />
                                 <div className="font-mono text-[10px] text-[var(--color-data)] flex justify-between z-10 w-full mb-2">
                                     <span>[ SYSTEM SCHEMATIC ]</span>
@@ -825,10 +826,17 @@ export default function LandingPage() {
 
             </main>
 
-            <footer className="py-2 px-8 flex justify-between items-center font-mono text-[10px] text-[var(--color-silica)] bg-[var(--color-void)] border-t-[2px] border-[var(--color-iron)] mt-auto relative z-10 font-bold bg-[#000]">
+            <footer className="py-2 px-8 flex justify-between items-center font-mono text-[10px] text-[var(--color-silica)] bg-[var(--color-void)] border-t-[2px] border-[var(--color-iron)] mt-auto relative z-10 font-bold bg-[#000] pb-20 sm:pb-2">
                 <span>EOF. © {new Date().getFullYear()} AKAWA_DEV // ALL PROTOCOLS RESERVED</span>
                 <span className="hidden sm:inline-block bg-[var(--color-iron)] text-white px-1">RENDER_ID: {renderId}</span>
             </footer>
+
+            {/* STICKY MOBILE CTA */}
+            <div className="fixed bottom-0 left-0 right-0 z-[60] p-4 bg-gradient-to-t from-black to-transparent sm:hidden">
+                <Link href="/signup" className="btn-alert w-full py-4 text-center block text-sm shadow-[0_0_20px_rgba(255,51,0,0.3)]">
+                    [ INITIALIZE_SYSTEM_ACCESS ]
+                </Link>
+            </div>
         </div>
     );
 }
