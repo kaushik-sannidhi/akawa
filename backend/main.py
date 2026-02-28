@@ -5,15 +5,15 @@ import logging
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from detector import WeaponDetector, WEAPON_CLASSES
+from app.detector import WeaponDetector, WEAPON_CLASSES
 import json
 import base64
 import numpy as np
 import torch
 from pydantic import BaseModel
 from typing import List
-from telemetry import telemetry_service
-from stream_manager import stream_manager
+from app.telemetry import telemetry_service
+from app.stream_manager import stream_manager
 import requests
 
 logger = logging.getLogger(__name__)
