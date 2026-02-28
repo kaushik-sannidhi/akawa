@@ -70,21 +70,21 @@ const useInView = (options = {}) => {
 };
 
 // Accurate US Contiguous Outline (simplified Albers projection, viewBox 0 0 960 600)
-const US_OUTLINE_PATH = "M 161,489 L 152,492 148,503 143,506 139,504 134,509 133,536 132,540 122,548 119,556 113,556 104,559 94,557 84,552 82,559 84,575 92,593 108,593 208,597 226,597 244,597 253,590 259,580 274,579 289,578 322,577 332,571 334,529 342,509 362,492 386,472 408,449 410,427 424,413 428,398 468,367 480,365 487,351 497,345 505,349 507,357 516,366 527,370 548,366 563,356 570,352 574,355 610,338 626,332 646,332 650,306 650,278 666,258 684,240 698,230 706,220 722,210 729,202 733,188 744,174 750,168 755,156 758,156 762,148 766,138 776,128 789,120 795,115 801,112 808,120 815,122 824,110 839,92 848,76 856,64 864,58 872,62 878,64 884,68 893,80 905,90 939,100 958,112 960,120 951,134 939,150 930,161 924,180 920,200 918,218 920,228 920,240 918,250 918,272 915,290 893,298 880,308 874,320 864,334 854,350 846,360 841,372 838,392 844,410 850,424 848,440 844,452 837,470 828,486 824,504 819,524 813,538 805,550 796,554 784,548 776,550 770,559 763,556 758,545 757,539 755,535 744,532 742,528 738,522 723,525 718,528 714,536 706,544 700,548 694,546 688,549 680,555 673,560 672,564 668,577 L 656,586 648,584 638,586 628,580 618,566 610,564 600,568 593,575 583,582 575,588 568,587 558,582 547,584 543,595 530,597 510,597 502,593 497,593 487,599 476,597 465,599 455,597 446,599 438,597 420,597 408,597 396,597 378,597 368,597 354,597 340,597 322,597 307,597 292,597 274,597 258,597 240,597 225,597 208,597 190,597 174,597 163,597 161,597 Z";
+const US_OUTLINE_PATH = "m 173.6,1157 h -1.5 -1.4 l 0.7,-4 h 3.6 z m -10.8,-4 -1.5,4 h -3.6 l 0.8,-4 h 1.4 z m 16.5,0 h -2.1 -0.7 1.4 2.1 z m 8.7,0 h -1.5 -2.1 -3.6 l 2.1,-4 h 4.3 1.5 z m -33.2,4 H 152 l -5.1,-4 h -5 -7.2 l -0.7,-4 h 7.9 2.9 3.6 v 0 l 2.8,4 h 4.4 z m 1501.2,-4 -5,4 1,-8 12,-8 3,4 3,4 h -8 z m -1537.1,-8 5,4 h 2.9 2.9 -0.8 l -2.8,4 h -7.2 l -4.4,-4 h -6.4 v -8 l 4.3,4 z m 114.4,-4 h 0.8 l -1.5,4 h -5.7 l -3.6,-4 -0.8,4 h -0.7 l -2.1,4 h -2.9 l -4.3,4 h -5.1 l -2.9,-4 -2.8,4 h -6.5 l -2.2,4 -2.9,-4 6.5,-4 5.8,-4 h 2.9 l 3.6,4 h 2.8 l 0.8,-4 v -4 h 2.1 2.2 1.4 3.6 1.5 l 0.7,-4 h 2.1 2.9 l 2.2,4 z m -149.01,0 h 0.72 -2.88 l -2.88,-4 1.44,-4 z m 7.2,-8 -0.72,4 -4.32,-4 h 2.16 2.16 z m -18.72,-4 h -3.6 l -1.44,-4 h 3.6 2.16 v 4 z m -28.12,-24 -1.44,4 -2.16,-4 5.04,-4 h 1.44 z m 721.45,8 v 8 h 3.6 l 1.6,4 6.4,4 -10,8 -6,4 -4.8,-4 -8,4 -7.2,16 -8.8,-12 -2,-20 -3.6,-8 8,-8 -2.8,-8 2,-4 28,12 z M 44.65,1097 h -4.32 l -5.02,-4 h 2.16 4.3 z m 300.25,4 -5,4 -2.9,4 -2.1,-4 h -1.5 v 4 l -2.9,4 v 0 l -2.8,4 -2.9,-4 2.1,-4 -2.8,-8 4.3,-4 3.6,4 4.3,-4 v -8 l 5,-4 h 5.1 v 4 h -5.8 v 4 l 2.2,4 z m 363.6,-16 h -10.8 l 8.8,-4 z m -13.6,-8 h -5.6 l -5.2,-8 h 4.4 7.2 z m 8.8,-16 5.6,8 h 9.2 l 10.4,4 v 4 l -3.6,4 -14,4 -2,-12 h -3.6 l -5.2,-4 v -4 z m 333.3,36 3,12 -4,-12 2,-16 v -4 l 3,-8 3,-4 3,-8 h 3 l -7,12 -5,12 z m -348.5,-44 1.2,4 h 9.6 l -6,4 h -19.2 l 3.6,-4 h 9.2 z m -445.8,4 h -5 l -7.2,-8 h 10 2.2 z m 419,-8 -0.8,4 h -7.2 -5.6 -7.2 l -5.2,-12 7.2,-4 4.4,-4 6,8 0.4,4 3.2,4 z m -464.4,-12 -3.6,4 -3.6,-4 1.5,-4 3.6,4 z m 367.2,-12 -4.8,4 h -3.2 l 0.8,-4 5.2,-4 h 2.8 z m 26.8,0 h -10 l -6.8,-4 0.8,-4 8,-4 h 7.2 l 5.2,4 z m 544.7,-28.3 -13,8.3 10,-8.3 z m -924.3,-8 5.1,4 h 5 l 1.4,4 7.2,4.3 -8.6,4 -3.6,-8.3 H 211 Z m 1039.3,-8 -5,3.6 -8,-3.6 6,-3.2 z m -931.3,-86.4 0.8,5.6 3.6,-4.4 4.3,5.2 6.5,-2.4 2.8,1.6 0.8,2.8 2.8,2.8 11.6,-2.8 9.3,4.4 10.1,-0.8 4.3,2.8 7.9,-4.8 14.4,5.6 27.6,135.1 8.4,4 4.4,-4 0.8,4 14.4,8 0.8,4 5.6,-4 1.6,-8 4.8,-4 h 4.4 l 1.6,4 v 4 l 14.4,8 15.6,16 6,4 10,4 h 9.2 l -0.8,4 4.4,8 -2.8,8 -4.4,-4 -4.4,4 -4.8,-8 h -2.8 l 1.2,4 4.4,8 -4.4,4 h -2 l -11.6,-8 v -8 l -3.6,-4 -0.8,8 h -4.4 v -8 l -2,-4 -0.8,4 h -4.8 l -16,-16 -2.8,-8 -28.8,-12 1.2,-4 h 0.8 -3.6 l -2,4 -9.6,-4 h -11.2 l -10.4,8 1.6,-8 h -13 l -5,-8 h -9.4 -5 l 1.4,4 5,4 -1.4,4 -3.6,4 h -6.5 l -8.6,8 -7.9,4 h -4.4 l 8,-8 h -5.1 -2.9 l 4.4,-8 v -8 l 6.4,-4 2.9,4 5.1,-4 -6.5,-4 h -4.3 l -6.5,8 -5.1,8 h -2.1 v 4 l -2.9,4 h -0.7 l -2.2,4 h -2.9 l -0.7,8 h 4.3 l -3.6,8 -2.8,4 -5.8,4 -2.2,4 h -2.8 l -2.9,4 h -2.9 l -1.4,4 -4.4,4 h -3.6 l -1.4,4 h -5 l -2.2,4 -3.6,4 -4.3,4 h -5.8 -3.6 -0.7 l -5,4 -2.2,-4 h -2.2 l -2.1,4 -2.9,4 h -4.3 -4.4 l -3.6,4 h -5.7 l -8.7,4 -0.7,-4 4.3,-8 h 10.8 5.1 l 9.3,-8 h 7.2 2.2 l 2.2,-4 5.7,-4 8.7,-4 h 2.8 l 2.9,-8 5.1,-4 h 0.7 l 2.2,-12 4.3,-8 -9.4,4 -2.9,-4 -2.8,8 -4.4,-8 h -3.6 l -2.8,-4 -5.1,4 h -3.6 l -2.9,4 -2.8,-4 h 2.1 l -0.7,-8 3.6,-4 -3.6,-8 -6.5,4 -6.5,-4 -6.5,-8 -1.4,-4 2.2,-4 h -1.5 l -2.1,-4 -0.8,-4 -2.1,-4 2.9,-4 2.1,-4 6.5,-4 2.9,-8 h 2.9 5 l 1.5,4 5.7,-4 7.2,-4 h 5.1 l -0.8,-8.3 -3.6,-4 5.1,-4 -0.8,-4 -4.3,0.8 -4.3,2.8 -3.6,4.4 -1.4,-4 -5.1,-0.4 h -7.9 l -7.9,-4 -1.5,-6.8 3.6,-3.6 -10,-5.6 18.7,-8.8 8.6,-1.2 v 6.4 l 11.5,4.4 3.6,-5.2 -1.4,-6.4 2.9,-2.8 -13.7,-3.6 -1.4,-8.8 -12.3,-12 2.9,-2.4 0.7,-5.6 h 13 l 11.5,-16.8 5.8,-0.4 10,-6.8 h 5.8 l 7.9,-7.2 z m -33.1,-155.6 6.5,10.8 -4.3,-2.4 z m -28.8,-52.8 v 4.4 l -5,-2 -0.7,-3.6 z m -9.3,2.8 -5.1,0.8 -2.9,-5.6 5.8,0.8 z m 1549.5,-27.2 1,2 h -3 l -4,3.2 2,-1.6 2,-2.8 z m -4,-233.2 -4,2.8 1,-2.8 v -1.6 -1.2 l 3,-1.6 z m 106,-62.8 -12,3.6 2,-0.8 4,-7.2 z m 15,0.8 -3,0.8 -4,-0.8 4,-1.6 1,-3.6 3,3.2 z m -451,-116 -9,3.6 -3,-1.2 6,-4.4 2,-2.4 z m -170,-64.8 -4,3.6 -4,-1.2 2,-3.2 8,-4 10,-7.2 v 3.6 l -3,3.6 z M 333.4,81.9 v 3.6 l -6.5,-5.2 1.5,-4.8 -3.6,-4.4 5,-1.6 -0.7,10 z M 321.9,56.7 h -4.3 l -0.8,-4.4 h 3.7 z m 8.6,-3.6 -2.9,2 -5,-2.8 3.6,-2 z m 80,7.2 32.4,8 17.2,4 21.6,5.2 10.8,2.8 28,6 36.8,7.6 18.8,3.6 29.6,6 22.8,3.6 26,4.4 15.2,2.8 35.2,4.8 36,5.2 29.6,3.6 30.8,3.6 29.6,2.8 28.8,2.4 31.6,2.8 26.8,1.6 14.4,1.2 38,1.6 18.8,0.8 14.7,0.4 30,0.8 21,0.8 h 24 31 5 l -1,-16.8 6,0.8 3,2.8 5,17.6 v 4.4 l 2,2.8 6,0.8 4,2 12,0.8 2,4.4 9,-1.6 v -1.6 l 8,-2.8 3,0.8 h 2 l 8,3.6 3,4.4 4,-0.8 4,9.2 3,-0.4 v -4.4 l 3,-1.6 5,2.4 -1,2 7,2 3,3.6 8,3.2 5,-2.4 6,-4.4 4,-2.8 4,6 h 11 l 7,-1.6 4,0.8 3,4.4 5,-2.4 3,1.6 -4,4.4 -5,2.8 -17,6.4 -5,3.6 -8,7.2 -12,15.2 -4,2 -6,6.4 -8,7.2 2,3.2 7,0.4 7,-2.8 13,-5.6 7,-4.4 3,2.8 -4,6 v 7.2 l 6,-3.6 5,3.6 h 4 l 11,-5.2 4,-4.4 3,-2 10,-2.4 6,-2.8 2,-3.6 6,-2 2,-3.6 10,-8.8 2,-3.6 7,-4.4 11,-1.2 v 3.6 l -6,4.4 -6,4 -5,12.4 1,5.6 5,-6.4 6,0.8 h 4 l 7,2 6,8 6,6 6,-0.8 4,-1.6 5,2.8 6,0.8 2,-3.6 11,-8.4 8,-2.4 11,-0.8 7,-3.6 8,-1.2 -1,10.8 1,1.2 h 8 l 4,-1.2 3,2 3,-3.6 9,-1.2 -1,3.6 2,10 8,8.4 h -6 -4 l -6,2.4 v -2.4 l -7,-1.2 -4,8.4 -6,-4.8 -10,-2.8 -6,0.4 -3,5.2 -7,1.6 -1,2 -8,-0.8 -4,2.8 -1,5.2 -2,1.6 -3,0.4 -2,6 -2,-1.6 4,-8.4 h -7 l -2,6.4 -3,2 -3,-1.2 -5,7.6 -5,12.4 -4,5.6 v 2.4 l -1,4.8 -3,0.8 -4,6.4 -2,6.8 -1,5.6 3,0.8 5,-6 v -1.2 l 4,-7.2 5,-2.4 5,-12.8 6,-2 v 4.8 l -2,1.6 -2,8.4 -4,3.6 v 5.2 l -3,7.2 -2,8.8 2,5.6 -4,3.6 -1,9.2 1,8.8 -2,6.4 -3,13.2 1,2.8 3,14.4 3,2.8 -1,5.2 1,7.2 -1,8.4 3,6 3,2.8 3,10 3,5.6 5,3.2 h 5 l 9,-5.2 3,-2 6,-6.8 4,-10 3,-5.6 2,-8 1,-15.2 -2,-9.2 -2,-6 -5,-7.6 -3,-6.8 -3,-5.6 3,-9.2 -4,-10.4 3,-4.8 3,-8 1,-7.2 -1,-8 4,-3.6 v -5.6 l 4,-2.8 h 4 l 1,-4.4 5,-1.6 v 13.2 l 3,0.4 2,-4.8 2,-2.8 v -8 l -2,-4.4 v -2.8 l 5,-4.4 3,-0.8 -1,-8.4 4,-6.8 6,-3.6 9,4.4 4,-0.8 3,0.8 4,5.2 h 6 l 3,2 13,4.4 2,3.6 2,2.8 -4,5.2 2,4.4 3,2 3,5.6 v 9.6 7.2 l -5,3.6 -1,4.8 -2,8 -6,0.8 -1,3.6 -1,6.4 2,2.8 7,3.2 7,-6.8 1,-4.8 3,-6.4 6,-2.4 4,-2.8 6,2 5,6.8 1,5.6 4,10.8 3,10.8 3,8 v 2 7.2 7.2 l -5,2.4 -2,-5.2 -3,2.8 v 8 l -2,4.4 -4,2 -1,3.6 1,6.4 -2,3.2 -7,10.8 v 2.8 l 10,3.6 7,3.6 -2,2.8 4,0.8 7,-2.4 7,2.4 4,-2.4 3,-0.4 7,-5.2 2,0.8 7,-0.8 7,-7.2 6,-6.4 8,-5.2 14,-8 6,-3.6 16,-12.8 8,-8 4,-4.4 5,-3.6 2,-5.6 5,-4.4 -1,-3.6 -6,-8.4 -3,-7.2 13,-7.2 5,-1.6 14,-2 7,-0.8 7,2.8 6,-2 6,-2.4 6,-0.8 7,-4 2,-3.6 6,-6 3,-0.8 3,-2.8 -1,-4.4 -2,-5.6 2,-5.6 -5,-1.6 -4,-4.4 1,-4.4 4,-4 8,-7.2 2,-5.2 10,-16.4 8,-8.8 5,-2 h 3 l 20,-4.4 21,-6 4,-1.2 19,-4.4 19,-5.2 13,-2.8 v -10 l 2,-3.6 6,1.6 v -3.2 l 4,-2.8 4,1.6 -1,-5.2 5,-1.2 -3,-3.2 v -3.6 l 3,-4.8 3,-3.6 -1,-2.8 3,-4.4 1,-2.8 -4,-3.2 1,-5.6 -2,-1.6 1,-6.4 4,-4.8 -1,-6.8 -1,-4.8 13,-38.4 6,0.8 1,7.2 5,0.8 8,-6.4 6,-1.6 v -3.6 l 3,-0.8 10,4.4 6,3.6 14,46 3,10.8 6,1.6 6,-0.8 -1,5.2 3,2.8 v 5.2 l 6,4.8 1,-2.8 h 4 l 10,12.4 -4,8.4 -4,0.8 -2,3.6 h -4 v 4.4 l -8,2.8 -3,2.8 1,2.8 -2,3.6 -3,-4.8 -5,1.2 5,4.4 -1,2.8 -6,1.6 v -6.4 l -6,3.6 1,4.8 -5,-0.4 -2,1.2 -2,-9.2 v 2.8 l -4,2.8 2,4.4 -1,3.6 v 7.2 l -1,7.2 -6,-1.6 -2,1.6 v 6.4 l -6,0.8 -1,5.2 h -4 l -5,2.8 -3,-0.8 -2,5.2 3,4 -4,2.4 1,4.4 -4,4.8 -1,13.2 -1,0.4 -1,8.8 3,7.2 5,2.8 -6,3.6 -2,6 -1,5.6 h 1 l 4,0.8 2,-0.8 1,0.8 7,4.8 -1,5.2 6,1.6 1,4 6,2.4 4,-2.4 6,-2.8 4,3.6 -15,7.2 v 2.8 l -6,2.4 -1,-8 -6,5.2 -1,4 -5,3.6 -7,0.8 3,-7.2 -2,-1.2 h -4 l -2,-0.8 1,4.4 1,7.6 v 5.2 l -12,5.2 -3,0.4 -11,5.3 -1,-1.5 -5,3.4 -12,2.4 -5,6.5 -3,0.7 -6,6.5 -7,4.3 -2,4.8 v 3.8 l 2,0.6 v -4.2 l 4,-2.8 4,1.4 1,-4.4 6,0.8 5,-3.6 13,-4.4 6,-6.4 5,1.2 3,-1.2 3,2 3,-4.4 h 3 l -16,13.6 -22,14.7 -5,2.5 -4,1.6 -7,1.6 -5,2 -4,-1.2 v -3.6 l 5,-5.8 -6,5.3 v 0.5 l -4,3.6 v 0.8 1.2 l -2,5.2 3,1.2 h 8 l 1,4.4 v 8.8 l 1,15.2 -2,10 -3,2 1,2.8 -2,4.4 -4,3.6 -3,6 -2,8.4 -3,4.4 -2,-3.6 1,-3.6 -1,-3.6 -9,-0.8 -9,-4.8 -5,-2.4 -2,-5.6 v -0.8 l 3,-8.8 v 0 l -2,0.8 -2,9.6 1,4.8 3,4.4 4,1.6 2,4.8 1,6 4,3.6 5,4.8 4,0.8 4,13.6 -1,16 -1,3.6 -2,6.4 h -2 l -4,8 v 7.2 l -1,4.8 -2,12.4 -5,4.4 -2,-5.2 v -13.6 l 2,-8 2,-2.8 1,-8.8 -8,0.8 3,-3.6 -4,-4.8 1,-3.2 h -3 v -4.8 l -4,7.2 -6,-4.4 -2,0.8 -4,-4.4 3,-2.8 -3,-3.6 4,-1.6 5,1.6 -8,-4.4 -3,-0.8 v -3.6 l 3,-1.2 -1,-4.4 v -6.4 l -4,-1.6 2,-8 1,-2.8 4,-0.8 -1,-8 -3,1.6 v 4.4 l -5,6.4 -3,-2.8 1,2 -2,6.4 -3,-0.4 v 1.2 l 4,2.4 v 6.4 l 1,2 -2,8.8 2,1.2 2,7.2 5,6 -2,2.8 h 3 l 3,7.2 -5,1.6 -4,-3.2 -7,-0.4 -2,-3.6 -2,2.8 -5,-6 -6,5.2 -2,-5.2 2,-7.2 -3,-0.4 -1,7.2 2,6.4 2,0.8 7,-3.6 1,4 2,2.4 4,1.2 8,-0.4 3,4 11,3.6 -1,3.6 v 6 l -1,2.8 h -6 l -4,-5.6 h -2 l -9,-6.8 10,8.8 2,0.8 4,4.8 7,2.4 4,2 -1,6 -4,-3.2 -1,2.4 4,3.6 -4,2 3,2.8 5,1.6 v 4.4 l -3,1.2 -8,-4 v -1.6 h -5 l -5,-2 -2,1.2 9,2.4 1,2.8 7,3.6 v 1.2 h 4 2 l 1,-3.6 4,0.8 6,-0.8 8,15.2 6,12.4 -1,0.8 -3,-8 -3,-2.4 v 10.4 2.8 l -6,-2.8 h -2 l 5,2.8 -3,4.4 -3,-2.4 2,2.4 -7,3.6 -4,3.6 -4,-0.8 -2,-3.6 v -6.4 l -1,2 v 4.4 l 3,8 5,-0.8 5,-2.8 2,2 6,-4.4 4,-0.8 2,3.2 -1,3.6 2,7.2 h 1 l -1,-9.6 3,-4.8 5,3.6 3,7.2 -1,5.6 -4,-0.8 -5,11.6 -6,2.8 -5,0.8 -6,-3.6 3,-5.2 -6,3.2 3,4.8 -1,2.4 6,2.8 -2,7.2 -4,4.8 -3,2.4 -5,-2.8 v 3.6 l 7,1.2 3,-2.8 6,-2.8 6,4.4 -3,4.8 -5,3.6 -10,1.6 -7,3.6 -6,7.2 -5,5.6 -6,7.2 -3,6.4 -2,10.8 -2,2.4 h -4 l -9,1.2 -6,3.6 -8,6.8 -6,7.6 -2,4.4 -2,8 v 6.4 l -2,2.8 -2,5.2 -8,0.8 1,4.8 -4,5.2 -5,3.6 v 2.8 l -4,3.6 -4,1.6 -4,3.6 -3,2 -5,0.8 2,3.6 v 3.6 l -7,5.6 -2,3.6 -4,3.2 v 2 l -1,5.6 -6,8.8 -3,0.8 4,3.6 -2,2.8 1,2 -4,7.2 1,3.2 1,2.8 -4,4.8 v 5.2 l 2,4.4 -1,8.8 1,7.6 5,10.8 8,19.6 2,4.4 6,9.2 6,11.6 12,13.6 7,7.2 3,5.2 -2,2.8 v 6.4 l 3,4 5,12.3 7,12 7,12 7,12 3,4 1,8 v 12 l 1,16 2,8 -5,4 -2,12 2,4 -2,4 v 0 0 l 4,-4 -3,12 -5,-4 h -3 l -5,4 h -6 -1 l -7,4 -4,-4 1,-8 -3,-4 -4,-4 -2,-4 -8,-4 -6,-4 -2,4 -6,-12 -3,-8 -8,-8 h -5 l 1,-8 v -4 l -3,-4 h -2 l 2,8 h -2 -3 l -5,-8 -7,-8 -6,-8 -3,-4 h 3 l 3,-8 4,-8 -1,-4 -4,4 -2,-4 -3,-4 v 4 l 3,4 -1,8 h -4 l -6,-8 2,-4 -2,-8 2,-4 2,-8.3 v -4 l -1,-6.4 -4,-5.6 1,-3.6 -2,-3.2 -4,-6.4 h -6 l -8,-4.4 -2,-4.8 -7,-3.6 -1,-6 -3,-0.4 -5,-3.6 -4,-6 -9,-3.6 -3,-1.2 h -4 l -6,0.4 -6,6 -4,3.6 -11,8.4 -9,2.4 -4,1.2 -4,0.8 v -4.8 l -3,-5.2 -5,-1.6 -3,-2.8 -16,-8 -8,-2 -8,-1.6 -8,0.8 -6,0.8 -5,1.6 -8,2 -6,0.8 -7,2.8 -5,1.6 -4,-1.6 -6,-4.4 -2,-10 -3,-1.6 -3,5.2 v 8.8 l -2,0.4 -6,-1.2 -2,1.2 -2,2.4 -8,-0.8 -3,0.8 -5,-2.8 -15,6.4 -2,-2.8 v 2.8 l -6,5.6 -4,1.6 -3,3.6 -5,2.8 1,2.8 5,2.8 3,-0.4 1,-5.2 3,-2 3,2.8 4,2 -6,12.4 -1,-0.8 h -1 l -5,1.6 1,4 8,5.2 10,1.6 7,8.4 -1,4 h -9 l -7,-8 -7,-0.8 -5,-1.6 1,-2 -8,-3.2 -2,3.6 v 0.8 0.8 l -3,2.4 2,4 v 0 l -5,4 -4,-8 h -4 -5 l -4,8 -7,4.3 -4,-4.3 h -4 l -9,-4 2,-8 h -1 l -4,-2 -4,1.6 -6,-11.6 -9,0.8 1,-4.4 h -5 l -6,4.4 -3,0.4 2,6.8 -6,2 -11,-1.6 -14,-5.6 -8,-2 -11,0.4 -10,1.6 -3,2 -9,1.6 -11,4.4 v 0.8 h -4 l -2,-0.8 -9,2 2,-4.8 v -5.2 h -4 l -4,3.6 -3,5.6 5,4 -1,8 -5,4.3 h -4 l 1,4 -10,8 -4,4 -10,4 -12,8 -11,4 -2,4 -6,4 -10,8 v -4 h 1 l 5,-4 4,-4 h 6 l -1,-4 -9,4 v -4 h -3 -3 l 2,4 v 4 h -1 l -4,4 -4,-4 -8,8 h 7 l -3,4 v 4 h -1 -11 -2 4 l 2,4 3,4 -3,4 -3,12 -4,-4 -4,4 h -5 l 8,4 5,-4 -2,20 h -2 l 2,8 4,8 2,8 h -1 l 1,8 h 5 l -3,4 -5,4 h -1 -6 l -4,-4 -8,-4 h -8 -8 l -7.5,-8 h -5.2 -2.8 l -6.4,-4 h -2.4 l -7.2,-4 -0.4,-4 -3.2,-4 -3.6,-12 -6.4,-8 1.6,-4 -1.6,-4 -1.2,-4 1.2,-8 h -1.2 l -3.6,-4 -4.4,-4 -6,-4 -0.4,-4 -3.2,-4 -3.6,-8 h -4.8 l -2.8,-4 -1.6,-8 -3.6,-8 -1.6,-4 -2,-4 -3.6,-8 v -4 l -4.4,-8.3 -8,-4.8 -1.2,-4.4 -3.6,-0.8 -6,-5.2 0.8,-2 -5.6,-5.2 -4.4,-2 -2.8,1.6 -4.4,-1.6 -8,-2 -3.6,1.2 -8.4,-4.8 -3.6,4.8 -3.2,-1.2 -7.6,2 -2.4,5.2 -2.8,3.6 -1.6,6.4 -12.8,17.5 -10,-4.3 -4.4,-8 -6.4,-0.4 -2.4,-3.6 -8.4,-2.8 -5.2,-3.6 -1.2,-4.4 -4.4,-1.2 -6.4,-6 -0.8,-4 -4.4,-8 -0.8,-6.4 1.6,-5.2 -3.6,-8.8 -2.4,-0.4 -0.4,-8 -2.4,-2.8 -8,-8.8 -6.4,-2 -0.8,-2.4 -4.8,-4.4 -1.6,-4 -5.6,-4.4 -2.8,-6 -4.4,-4.4 -2.4,-0.4 -4.8,-4.4 -5.2,-11.6 -4.8,-2.8 -27.6,-2.8 -33.2,-4.4 -2.8,19.2 -30,-4 -51.2,-7.2 -22.4,-3.6 -10,-6 -29.6,-17.2 -36.8,-20.8 -30,-18.8 -18.8,-10.8 1.2,-5.2 4.4,-3.6 -49.6,-5.6 -36.8,-5.2 -0.7,-5.6 -2.9,-2 2.2,-7.2 -0.7,-10.8 -3.6,-10.4 -2.9,-3.6 -5,-7.6 -4.4,-3.6 -5,-7.2 h -6.5 l -4.3,-4.4 2.2,-2.4 -0.8,-4.8 -3.6,-5.2 h -8.6 l -4.3,-2.8 -7.9,-6.4 -0.8,-6 -5.7,-6.4 -2.9,-2 -10.8,-2.8 -3.6,-3.2 -9.4,-2.8 -6.4,-0.8 -0.8,-3.6 -3.6,-3.6 2.9,-4.8 1.5,-11.6 1.4,-6.4 -7.2,-7.2 2.9,-6.4 -3.6,-3.6 -3.6,-8.8 -2.9,-2 -1.4,-6 -2.9,-4.8 v -6 l -2.2,-1.2 -2.9,-8 -2.8,-2.8 -1.5,-11.6 2.2,-6.4 4.3,0.4 2.2,-7.6 -2.2,-6.8 h -5 l -4.4,-4.8 -0.7,-4.4 -2.9,-4.4 2.2,-6.4 -0.7,-6.4 -1.5,-1.6 2.9,-8 0.7,-2.8 3.6,-0.8 -0.7,4.4 -0.7,6 3.6,1.2 2.9,6 2.9,0.4 -2.2,-2 0.7,-7.2 -4.3,-7.2 1.4,-3.6 -2.1,-4.4 5.7,-2 -2.8,-5.2 -3.6,0.8 -3.6,12.4 -5.8,-5.2 -2.9,-5.6 -2.9,-2.4 0.8,-5.6 v -6 l -2.2,-7.6 -5,-7.2 -3.6,-10.4 -2.9,-4 -1.5,-5.2 2.9,-3.6 -0.7,-13.6 4.3,-8 0.7,-12.4 -2.8,-8.4 -1.5,-5.2 -2.1,-2 -4.4,-7.2 1.5,-8 4.3,-6.4 8.6,-8.8 3.6,-5.6 -0.7,-2.8 3.6,-6 3.6,-9.2 0.7,-12.4 -2.1,-2 4.3,-8.8 -2.9,-6.4 v -5.6 l 1.5,-8 2.8,-6 0.8,-3.6 -2.2,-8.4 3.6,-4.4 7.2,-11.6 5,-6.4 4.4,-6.4 4.3,-10 6.5,-16.8 6.4,-15.2 1.5,-5.6 5,-9.2 2.2,-4.4 8.6,-24 v -2 l 4.3,-11.6 3.6,-2.8 10.1,-1.6 -5,-2.8 -5.1,0.8 -2.1,-3.6 1.4,-6.4 3.6,-1.6 -0.7,-8.8 -1.4,-4 1.4,-3.2 3.6,-1.2 v -5.2 l -3.6,-0.8 0.7,-11.2 -1.4,-6 1.4,-4.8 v -9.6 l -2.9,-7.2 -0.7,-4.8 0.7,-8 4.4,-6 2.8,-0.4 4.4,4.8 3.6,2.4 4.3,4.8 9.3,3.6 7.2,4.4 5.1,1.6 2.9,-1.6 2.1,4.4 2.9,1.2 5,-2 2.2,2.8 -1.4,10 -7.2,1.6 -2.9,5.2 -2.9,1.2 -2.2,2.8 4.4,-2.8 5,-0.8 3.6,-4.8 5.8,-3.6 -0.8,7.2 -2.8,10 -2.9,3.6 -2.9,5.6 -5,-3.6 v -2 l -2.9,2.8 -0.7,4.4 3.6,4.4 7.2,-6 3.6,-1.2 2.8,-1.6 v -8.4 l 2.9,-8 4.3,-6.4 3.6,-2.4 -2.8,-4.4 v -5.6 -1.6 l 1.4,-1.2 -6.5,-6.4 2.9,-4.4 2.9,2.8 2.1,-7.2 0.8,-3.6 -5.1,-4.4 -1.4,-4.4 2.1,-4 28.1,7.6 24.5,6.8 z";
 
-// Node positions calibrated for the 960x600 viewBox US outline
+// Node positions calibrated for the 2000x1200 viewBox US outline
 const THREAT_NODES = [
-    { cx: 200, cy: 440, name: "NODE_LAX" },
-    { cx: 170, cy: 360, name: "NODE_SFO" },
-    { cx: 225, cy: 210, name: "NODE_SEA" },
-    { cx: 340, cy: 440, name: "NODE_PHX" },
-    { cx: 450, cy: 340, name: "NODE_DEN" },
-    { cx: 580, cy: 470, name: "NODE_DFW" },
-    { cx: 650, cy: 290, name: "NODE_ORD" },
-    { cx: 830, cy: 200, name: "NODE_JFK" },
-    { cx: 800, cy: 280, name: "NODE_DCA" },
-    { cx: 780, cy: 530, name: "NODE_MIA" },
-    { cx: 600, cy: 520, name: "NODE_IAH" },
+    { cx: 300, cy: 750, name: "NODE_LAX" },
+    { cx: 150, cy: 500, name: "NODE_SFO" },
+    { cx: 300, cy: 200, name: "NODE_SEA" },
+    { cx: 480, cy: 760, name: "NODE_PHX" },
+    { cx: 750, cy: 560, name: "NODE_DEN" },
+    { cx: 1050, cy: 880, name: "NODE_DFW" },
+    { cx: 1250, cy: 450, name: "NODE_ORD" },
+    { cx: 1700, cy: 380, name: "NODE_JFK" },
+    { cx: 1600, cy: 480, name: "NODE_DCA" },
+    { cx: 1480, cy: 1050, name: "NODE_MIA" },
+    { cx: 1050, cy: 1000, name: "NODE_IAH" },
 ];
 
 const USThreatMap = () => {
@@ -104,30 +104,30 @@ const USThreatMap = () => {
     }, []);
 
     return (
-        <div className="w-full flex flex-col pt-8 lg:p-12 lg:pl-0 h-full border-b-[2px] lg:border-b-0 border-[var(--color-iron)]">
-            <div className="flex justify-between w-full font-mono text-xs text-[var(--color-silica)] border-b-[2px] border-[var(--color-iron)] pb-2 mb-8 uppercase font-bold px-8 lg:px-0">
+        <div className="w-full flex-1 flex flex-col pt-8 lg:pt-12 lg:pb-0 lg:pl-12 lg:pr-12 border-b-[2px] lg:border-b-0 border-[var(--color-iron)]">
+            <div className="flex justify-between w-full font-mono text-xs text-[var(--color-silica)] border-b-[2px] border-[var(--color-iron)] pb-2 mb-8 uppercase font-bold px-8 lg:px-4">
                 <span>[ GLOBAL_THREAT_MATRIX ]</span>
                 <span className="text-[var(--color-alert)] animate-pulse hidden sm:inline-block">ACTIVE_NODE_SYNDICATION</span>
             </div>
 
             <div className="flex-1 flex items-center justify-center relative w-full px-4 sm:px-8 lg:px-0 py-8 mix-blend-screen opacity-80 min-h-[250px] sm:min-h-[300px]">
-                <svg viewBox="80 50 900 560" className="w-full h-full drop-shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-visible" preserveAspectRatio="xMidYMid meet">
+                <svg viewBox="0 0 2000 1200" className="w-full h-full drop-shadow-[0_0_15px_rgba(255,255,255,0.1)] overflow-visible" preserveAspectRatio="xMidYMid meet">
                     {/* Grid lines */}
-                    <path d="M200,50 V610 M400,50 V610 M600,50 V610 M800,50 V610 M80,200 H980 M80,400 H980" stroke="rgba(255,255,255,0.03)" strokeWidth="1" strokeDasharray="8,8" />
+                    <path d="M400,0 V1200 M800,0 V1200 M1200,0 V1200 M1600,0 V1200 M0,300 H2000 M0,600 H2000 M0,900 H2000" stroke="rgba(255,255,255,0.03)" strokeWidth="2" strokeDasharray="16,16" />
 
                     {/* Accurate US Contiguous Outline */}
                     <path
                         d={US_OUTLINE_PATH}
                         fill="rgba(255,255,255,0.015)"
                         stroke="var(--color-iron)"
-                        strokeWidth="2"
+                        strokeWidth="4"
                         strokeLinejoin="round"
                     />
 
                     {/* Targeting Crosshairs at center */}
-                    <line x1="530" y1="360" x2="530" y2="400" stroke="var(--color-alert)" strokeWidth="1" opacity="0.3" />
-                    <line x1="510" y1="380" x2="550" y2="380" stroke="var(--color-alert)" strokeWidth="1" opacity="0.3" />
-                    <circle cx="530" cy="380" r="30" fill="none" stroke="var(--color-iron)" strokeWidth="1" strokeDasharray="4 4" opacity="0.4" />
+                    <line x1="1060" y1="560" x2="1060" y2="640" stroke="var(--color-alert)" strokeWidth="2" opacity="0.3" />
+                    <line x1="1020" y1="600" x2="1100" y2="600" stroke="var(--color-alert)" strokeWidth="2" opacity="0.3" />
+                    <circle cx="1060" cy="600" r="60" fill="none" stroke="var(--color-iron)" strokeWidth="2" strokeDasharray="8 8" opacity="0.4" />
 
                     {/* Threat Nodes — all aligned around (cx, cy) */}
                     {THREAT_NODES.map((node, i) => {
@@ -136,20 +136,20 @@ const USThreatMap = () => {
                             <g key={i}>
                                 {isActive && (
                                     <>
-                                        <circle cx={node.cx} cy={node.cy} r="28" fill="var(--color-alert)" opacity="0.08" className="animate-ping" />
-                                        <circle cx={node.cx} cy={node.cy} r="16" fill="none" stroke="var(--color-alert)" strokeWidth="1" opacity="0.35" />
+                                        <circle cx={node.cx} cy={node.cy} r="56" fill="var(--color-alert)" opacity="0.08" className="animate-ping" />
+                                        <circle cx={node.cx} cy={node.cy} r="32" fill="none" stroke="var(--color-alert)" strokeWidth="2" opacity="0.35" />
                                     </>
                                 )}
                                 <circle
                                     cx={node.cx}
                                     cy={node.cy}
-                                    r={isActive ? 5 : 2.5}
+                                    r={isActive ? 10 : 5}
                                     fill={isActive ? "var(--color-alert)" : "var(--color-iron)"}
                                 />
                                 {isActive && (
                                     <>
-                                        <line x1={node.cx} y1={node.cy} x2={node.cx + 30} y2={node.cy - 25} stroke="var(--color-alert)" strokeWidth="1" opacity="0.5" />
-                                        <text x={node.cx + 33} y={node.cy - 22} fill="var(--color-alert)" fontSize="11" fontFamily="monospace" fontWeight="bold">
+                                        <line x1={node.cx} y1={node.cy} x2={node.cx + 60} y2={node.cy - 50} stroke="var(--color-alert)" strokeWidth="2" opacity="0.5" />
+                                        <text x={node.cx + 66} y={node.cy - 44} fill="var(--color-alert)" fontSize="22" fontFamily="monospace" fontWeight="bold">
                                             [{node.name}]
                                         </text>
                                     </>
@@ -160,7 +160,7 @@ const USThreatMap = () => {
                 </svg>
             </div>
 
-            <div className="flex justify-between w-full font-mono text-[10px] text-[var(--color-iron)] border-t-[2px] border-[var(--color-iron)] pt-2 mt-8 px-8 lg:px-0 font-bold">
+            <div className="flex justify-between w-full font-mono text-[10px] text-[var(--color-iron)] border-t-[2px] border-[var(--color-iron)] py-3 mt-auto px-8 lg:px-4 font-bold">
                 <span>TOPOLOGY: AKAWA_US_MAINNET</span>
                 <span>LATENCY_SIG: &lt;4ms</span>
             </div>
@@ -307,7 +307,10 @@ export default function LandingPage() {
         return () => ctx.revert();
     }, []);
 
-    const [renderId] = useState(() => Math.random().toString(36).substring(7).toUpperCase());
+    const [renderId, setRenderId] = useState("");
+    useEffect(() => {
+        setRenderId(Math.random().toString(36).substring(7).toUpperCase());
+    }, []);
 
     return (
         <div className="min-h-screen flex flex-col font-sans uppercase tracking-wide selection:bg-[var(--color-alert)] selection:text-[var(--color-void)] relative overflow-hidden bg-[var(--color-void)]">
@@ -529,7 +532,7 @@ export default function LandingPage() {
                 <section ref={axiomRef} className="gsap-reveal border-b-[2px] border-[var(--color-iron)] bg-[var(--color-data)] text-black relative">
                     <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[50vh]">
                         <div className="lg:col-span-4 p-8 md:p-16 border-b-[2px] lg:border-b-0 lg:border-r-[2px] border-[var(--color-iron)] bg-[var(--color-void)] text-[var(--color-data)] flex flex-col justify-center">
-                            <h2 className="text-5xl md:text-6xl lg:text-7xl font-black tracking-tighter leading-none mb-6">OPERATIONAL<br />AXIOMS</h2>
+                            <h2 className="text-5xl md:text-6xl lg:text-7xl font-black tracking-tighter leading-none mb-6">AI<br />POWERED</h2>
                             <p className="font-mono text-xs text-[var(--color-silica)]">
                                 HUMANS CANNOT MONITOR THOUSANDS OF FEEDS SIMULTANEOUSLY. WE REMOVE THE HUMAN LIMITATION FROM THE DETECTION LOOP.
                             </p>
@@ -541,7 +544,7 @@ export default function LandingPage() {
                                 className="flex-1 p-8 md:p-12 border-b-[2px] border-[var(--color-iron)] hover:bg-[var(--color-void)] hover:text-[var(--color-data)] cursor-crosshair flex flex-col justify-center"
                             >
                                 <div className="font-mono font-bold text-xs mb-4">AXIOM_01</div>
-                                <h3 className="text-3xl md:text-5xl font-black tracking-tighter mb-2 uppercase">Preemption Over Reaction</h3>
+                                <h3 className="text-3xl md:text-5xl font-black tracking-tighter mb-2 uppercase">Prediction over reaction</h3>
                             </div>
 
                             <div
@@ -549,7 +552,7 @@ export default function LandingPage() {
                                 className="flex-1 p-8 md:p-12 border-b-[2px] border-[var(--color-iron)] hover:bg-[var(--color-void)] hover:text-[var(--color-data)] cursor-crosshair flex flex-col justify-center"
                             >
                                 <div className="font-mono font-bold text-xs mb-4">AXIOM_02</div>
-                                <h3 className="text-3xl md:text-5xl font-black tracking-tighter mb-2 uppercase">Machine Tirelessness</h3>
+                                <h3 className="text-3xl md:text-5xl font-black tracking-tighter mb-2 uppercase">Machine Consistency</h3>
                             </div>
 
                             <div
@@ -557,7 +560,7 @@ export default function LandingPage() {
                                 className="flex-1 p-8 md:p-12 hover:bg-[var(--color-void)] hover:text-[var(--color-data)] group cursor-crosshair flex flex-col justify-center"
                             >
                                 <div className="font-mono font-bold text-xs mb-4">AXIOM_03</div>
-                                <h3 className="text-3xl md:text-5xl font-black tracking-tighter mb-2 uppercase text-[var(--color-alert)] group-hover:text-[var(--color-alert)]">Zero Grace Period</h3>
+                                <h3 className="text-3xl md:text-5xl font-black tracking-tighter mb-2 uppercase text-[var(--color-alert)] group-hover:text-[var(--color-alert)]">Instant Response</h3>
                             </div>
                         </div>
                     </div>
@@ -569,38 +572,38 @@ export default function LandingPage() {
                 >
                     {/* Left Grid: The Threat Vectors (Flex Directional Expansion) */}
                     <div className="flex flex-col lg:w-1/2 bg-[var(--color-void)] border-r-[2px] border-[var(--color-iron)] h-full">
-                        <div className="flex-1 hover:flex-[2] transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] p-8 border-b-[2px] border-[var(--color-iron)] hover:bg-[var(--color-alert)] hover:text-black cursor-crosshair group flex flex-col overflow-hidden relative">
+                        <div className="flex-1 hover:flex-[1.5] transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] p-8 group-hover:pb-[35px] border-b-[2px] border-[var(--color-iron)] hover:bg-[var(--color-alert)] hover:text-black cursor-crosshair group flex flex-col overflow-hidden relative">
                             <div className="font-mono text-[var(--color-alert)] font-bold text-xs mb-4 flex flex-col sm:flex-row gap-2 justify-between border-b-[2px] border-[var(--color-alert)] pb-2 group-hover:text-black group-hover:border-black shrink-0 relative z-10">
                                 <span className="bg-[var(--color-alert)] text-black group-hover:bg-black group-hover:text-[var(--color-alert)] px-1">MODEL: YOLOv11</span>
                                 <span>[ KINETIC_THREAT ]</span>
                             </div>
                             <h3 className="text-3xl md:text-5xl font-bold text-[var(--color-data)] uppercase group-hover:text-black leading-none break-words shrink-0 relative z-10 transition-transform duration-500 origin-left">Weapon<br />Detection</h3>
                             {/* Inner detailed text only visible when expanded */}
-                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-4 leading-relaxed absolute bottom-4 border-l-[4px] border-black pl-4">
+                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-0 group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
                                 CLASSIFIES 87+ FIREARM TYPES IN UNDER 12MS. <br />ZERO FALSE-POSITIVE TOLERANCE PROTOCOL ACTIVE.
                             </p>
                         </div>
 
-                        <div className="flex-1 hover:flex-[2] transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] p-8 border-b-[2px] border-[var(--color-iron)] hover:bg-[var(--color-data)] hover:text-black cursor-crosshair group flex flex-col overflow-hidden relative">
+                        <div className="flex-1 hover:flex-[1.5] transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] p-8 group-hover:pb-[35px] border-b-[2px] border-[var(--color-iron)] hover:bg-[var(--color-data)] hover:text-black cursor-crosshair group flex flex-col overflow-hidden relative">
                             <div className="font-mono text-[var(--color-data)] font-bold text-xs mb-4 flex flex-col sm:flex-row gap-2 justify-between border-b-[2px] border-[var(--color-data)] pb-2 group-hover:text-black group-hover:border-black shrink-0 relative z-10">
                                 <span className="bg-[var(--color-data)] text-black px-1 group-hover:bg-black group-hover:text-[var(--color-data)]">MODEL: LOCAL_TRACKER</span>
                                 <span>[ HOSTILE_KINEMATICS ]</span>
                             </div>
                             <h3 className="text-3xl md:text-5xl font-bold text-[var(--color-data)] uppercase group-hover:text-black leading-none break-words shrink-0 relative z-10 transition-transform duration-500 origin-left">Attack<br />Stances</h3>
                             {/* Inner detailed text only visible when expanded */}
-                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-4 leading-relaxed absolute bottom-4 border-l-[4px] border-black pl-4">
+                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-0 group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
                                 MULTI-POINT SKELETAL INFERENCE TRACKS HOSTILE WIND-UP, <br />LUNGES, AND AGGRESSIVE VECTOR APPROACHES.
                             </p>
                         </div>
 
-                        <div className="flex-1 hover:flex-[2] transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] p-8 hover:bg-[var(--color-data)] hover:text-black cursor-crosshair group flex flex-col bg-[var(--color-dim)] hover:bg-[var(--color-data)] overflow-hidden relative">
+                        <div className="flex-1 hover:flex-[1.5] transition-all duration-500 ease-[cubic-bezier(0.25,1,0.5,1)] p-8 group-hover:pb-[35px] hover:bg-[var(--color-data)] hover:text-black cursor-crosshair group flex flex-col bg-[var(--color-dim)] hover:bg-[var(--color-data)] overflow-hidden relative">
                             <div className="font-mono text-[var(--color-silica)] font-bold text-xs mb-4 flex flex-col sm:flex-row gap-2 justify-between border-b-[2px] border-[var(--color-silica)] pb-2 group-hover:text-black group-hover:border-black shrink-0 relative z-10">
                                 <span className="bg-[var(--color-silica)] text-black px-1 group-hover:bg-black group-hover:text-[var(--color-data)]">MODEL: LOCAL_TRACKER</span>
                                 <span>[ BIOMETRIC_EVENT ]</span>
                             </div>
                             <h3 className="text-3xl md:text-5xl font-bold text-[var(--color-silica)] uppercase group-hover:text-black leading-none break-words shrink-0 relative z-10 transition-transform duration-500 origin-left">Medical<br />Emergencies</h3>
                             {/* Inner detailed text only visible when expanded */}
-                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-4 leading-relaxed absolute bottom-4 border-l-[4px] border-black pl-4">
+                            <p className="font-mono text-sm font-bold opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-0 group-hover:mt-2 leading-relaxed relative border-l-[4px] border-black pl-4">
                                 SUDDEN COLLAPSE DETECTION, ERRATIC GAIT ANALYSIS, <br />AND PROLONGED IMMOBILITY TRIGGERS.
                             </p>
                         </div>
@@ -609,11 +612,6 @@ export default function LandingPage() {
                     {/* Right Grid: Global Threat Map filling out the layout */}
                     <div className="lg:w-1/2 flex flex-col h-full bg-[var(--color-dim)] overflow-hidden">
                         <USThreatMap />
-                        <div className="p-8 flex-1 flex flex-col justify-end text-[var(--color-silica)] font-mono text-xs leading-relaxed max-w-md bg-[var(--color-void)] z-10">
-                            <p className="border-l-[2px] border-[var(--color-alert)] pl-4 backdrop-blur-md">
-                                THE ARCHITECTURE ABSTRACTS GLOBAL INFRASTRUCTURE INTO A SINGULAR CONSTRUCT. CAMERA ENDPOINTS ARE NO LONGER PASSIVE SENSORS; THEY ARE <span className="text-white">COMPUTATIONAL PROXIES</span> SECURING PHYSICAL SPACE AT SUBLIMINAL SPEEDS.
-                            </p>
-                        </div>
                     </div>
                 </section>
 
@@ -644,11 +642,8 @@ export default function LandingPage() {
                                 Weapon<br />Detection
                             </h3>
                             <p className="font-mono text-xs leading-relaxed z-10 relative opacity-80 group-hover:opacity-100 group-hover:font-bold">
-                                Uses a YOLOv8 object detection model (with BoT-SORT tracking) to identify guns and knives in real-time, maintaining a lock even through motion blur.
+                                Uses a YOLOv11 object detection model (with BoT-SORT tracking) to identify guns and knives in real-time, maintaining a lock even through motion blur.
                             </p>
-                            <div className="absolute -bottom-16 -right-16 text-[10rem] font-black tracking-tighter opacity-5 group-hover:opacity-20 transition-opacity z-0 pointer-events-none">
-                                01
-                            </div>
                         </div>
 
                         {/* Capability 2 */}
@@ -663,9 +658,6 @@ export default function LandingPage() {
                             <p className="font-mono text-xs leading-relaxed z-10 relative opacity-80 group-hover:opacity-100 group-hover:font-bold">
                                 Uses an action-recognition model (like MediaPipe or a 3D CNN) to identify aggressive motions (fights) or sudden vertical-to-horizontal drops (falls).
                             </p>
-                            <div className="absolute -bottom-16 -right-16 text-[10rem] font-black tracking-tighter opacity-5 group-hover:opacity-20 transition-opacity z-0 pointer-events-none">
-                                02
-                            </div>
                         </div>
 
                         {/* Capability 3 */}
@@ -680,9 +672,6 @@ export default function LandingPage() {
                             <p className="font-mono text-xs leading-relaxed z-10 relative opacity-80 group-hover:opacity-100 group-hover:font-bold">
                                 A dashboard where users can either paste a live stream link or upload an .mp4 file for immediate scanning. Universal ingestion protocol.
                             </p>
-                            <div className="absolute -bottom-16 -right-16 text-[10rem] font-black tracking-tighter opacity-5 group-hover:opacity-20 transition-opacity z-0 pointer-events-none">
-                                03
-                            </div>
                         </div>
                     </div>
                 </section>
