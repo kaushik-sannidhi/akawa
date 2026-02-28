@@ -32,9 +32,6 @@ class Stream:
         # Detection-result subscribers (viewers connect via /ws/stream_out)
         self.detection_wss: Set[WebSocket] = set()
 
-        # WebRTC signaling connections
-        self.provider_signal_ws: Optional[WebSocket] = None
-        self.viewer_signal_wss: Dict[str, WebSocket] = {}  # peer_id -> ws
 
         # Legacy viewer WS for fallback frame broadcast (server_cam / rtsp only)
         self.fallback_wss: Set[WebSocket] = set()
@@ -51,8 +48,7 @@ class Stream:
             "source": self.source,
             "uid": self.uid,
             "device_id": self.device_id,
-            "status": self.status,
-            "subscriber_count": len(self.detection_wss) + len(self.viewer_signal_wss) + len(self.fallback_wss),
+            "subscriber_count": len(self.detection_wss) + len(self.fallback_wss),
         }
 
 
@@ -120,12 +116,6 @@ class StreamManager:
             await _safe_close(ws)
         stream.fallback_wss.clear()
 
-        # Close signaling connections
-        if stream.provider_signal_ws:
-            await _safe_close(stream.provider_signal_ws)
-        for ws in list(stream.viewer_signal_wss.values()):
-            await _safe_close(ws)
-        stream.viewer_signal_wss.clear()
 
         # Remove from dict AFTER all connections are closed
         self.streams.pop(stream_id, None)
