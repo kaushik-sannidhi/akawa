@@ -113,6 +113,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                         setIsStreaming(true);
                     }
                     if (data.detections) {
+                        console.log(`[StreamNode] Detections for ${stream.name}:`, data.detections, "Threat:", data.threat_type);
                         // Throttle: skip if identical to last
                         const key = JSON.stringify(data.detections.map((d: any) => d.class_name + d.confidence.toFixed(2)));
                         if (key !== lastDetRef.current) {

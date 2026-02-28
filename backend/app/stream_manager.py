@@ -391,7 +391,9 @@ class StreamManager:
         stream.last_alert_event_ts = now_ms
 
         threat_dets = [d for d in detections if _is_threat_detection(d)]
-        if not threat_dets:
+        # Allow persistence if there is an explicit threat_type, even if
+        # no individual bboxes were found (common for sequence-level violence).
+        if not threat_dets and threat_type == "none":
             return
 
         try:
@@ -409,8 +411,8 @@ class StreamManager:
                 "stream_name": stream.name,
                 "timestamp": now_ms,
                 "threat_type": threat_type,
-                "classes": [d.get("class_name") for d in threat_dets],
-                "top_confidence": max(float(d.get("confidence", 0.0)) for d in threat_dets),
+                "classes": [d.get("class_name") for d in threat_dets] if threat_dets else [threat_type],
+                "top_confidence": max(float(d.get("confidence", 0.0)) for d in threat_dets) if threat_dets else 0.85,
                 "detections": detections,
                 "snapshot_url": f"/live-events/{stream.uid}/{image_name}",
             }
