@@ -99,29 +99,54 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
     /** Safely play a video element — shows play button on mobile if autoplay blocked */
     const safePlay = useCallback((video: HTMLVideoElement) => {
         if (!video) return;
-        // Ensure playsInline for iOS
-        video.setAttribute("playsinline", "true");
-        video.setAttribute("webkit-playsinline", "true");
+        // Force inline playback attributes for iOS
+        video.playsInline = true;
+        video.setAttribute("playsinline", "");
+        video.setAttribute("webkit-playsinline", "");
+        // Must be muted for autoplay to work on mobile
+        video.muted = true;
+
         const playPromise = video.play();
         if (playPromise !== undefined) {
-            playPromise.catch(() => {
-                // Autoplay blocked (common on mobile) — show manual play button
-                setShowPlayButton(true);
-            });
+            playPromise
+                .then(() => {
+                    // Autoplay worked — hide play button if it was showing
+                    setShowPlayButton(false);
+                })
+                .catch(() => {
+                    // Autoplay blocked (common on mobile) — show manual play button
+                    setShowPlayButton(true);
+                });
         }
     }, []);
 
     /** Handle user tapping the play button overlay */
     const handleManualPlay = useCallback(() => {
         setShowPlayButton(false);
-        if (isOwnerOfClientCam && localVideoRef.current) {
-            localVideoRef.current.muted = true;
-            localVideoRef.current.play().catch(() => {});
-        } else if (remoteVideoRef.current) {
-            // Keep muted for reliable playback; user can unmute via the audio button
-            remoteVideoRef.current.muted = true;
-            remoteVideoRef.current.play().catch(() => {});
+
+        const video = isOwnerOfClientCam ? localVideoRef.current : remoteVideoRef.current;
+        if (!video) return;
+
+        video.playsInline = true;
+        video.muted = true;
+
+        // On mobile Safari, re-assigning srcObject can kick the decoder
+        if (!isOwnerOfClientCam) {
+            // Viewer side — reconnect the remote stream from the PC
+            const pc = peerConnectionsRef.current.get("provider");
+            if (pc) {
+                const receivers = pc.getReceivers();
+                const videoReceiver = receivers.find(r => r.track?.kind === "video");
+                if (videoReceiver && videoReceiver.track) {
+                    // Build a fresh MediaStream from the existing tracks
+                    const stream = new MediaStream();
+                    receivers.forEach(r => { if (r.track) stream.addTrack(r.track); });
+                    video.srcObject = stream;
+                }
+            }
         }
+
+        video.play().catch(() => {});
     }, [isOwnerOfClientCam]);
 
     const stopLocalStream = useCallback(() => {
@@ -433,12 +458,18 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         const pc = new RTCPeerConnection(ICE_SERVERS);
                         peerConnectionsRef.current.set("provider", pc);
 
-                        // When we receive the remote video track
+                        // When we receive remote tracks (audio + video)
                         pc.ontrack = (e) => {
                             console.log("[WebRTC Viewer] Got remote track", e.track.kind);
-                            if (remoteVideoRef.current && e.streams[0]) {
+                            if (!remoteVideoRef.current || !e.streams[0]) return;
+
+                            // Only assign srcObject once (both tracks share the same stream)
+                            if (remoteVideoRef.current.srcObject !== e.streams[0]) {
                                 remoteVideoRef.current.srcObject = e.streams[0];
-                                // Ensure muted for autoplay (mobile requires this)
+                            }
+
+                            // Kick playback only when the video track arrives
+                            if (e.track.kind === "video") {
                                 remoteVideoRef.current.muted = true;
                                 safePlay(remoteVideoRef.current);
                                 setVideoLoaded(true);
@@ -662,7 +693,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             </div>
 
             {/* Video area */}
-            <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden z-20">
+            <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
                 {/* Loading spinner — hide once video has data */}
                 {!videoLoaded && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0d0d0d] z-30">
@@ -687,16 +718,18 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                     </div>
                 )}
 
-                {/* Local video preview (camera owner) */}
+                {/* Local video preview (camera owner)
+                     — position:absolute + z-10 so it sits in a proper stacking layer
+                     — transform:translateZ(0) forces its own GPU compositing layer on
+                       mobile, preventing the canvas overlay from "replacing" it visually */}
                 {showLocalVideo && (
                     <video
                         ref={localVideoRef}
-                        className={`h-full w-full object-cover ${videoLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        className="absolute inset-0 h-full w-full object-cover z-10"
+                        style={{ transform: "translateZ(0)" }}
                         muted
                         playsInline
                         onLoadedData={() => setVideoLoaded(true)}
-                        // @ts-ignore — webkit-playsinline for older iOS
-                        webkit-playsinline="true"
                     />
                 )}
 
@@ -704,12 +737,11 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                 {showRemoteVideo && (
                     <video
                         ref={remoteVideoRef}
-                        className={`h-full w-full object-cover ${videoLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        className="absolute inset-0 h-full w-full object-cover z-10"
+                        style={{ transform: "translateZ(0)" }}
                         muted={isMuted}
                         playsInline
                         onLoadedData={() => { setVideoLoaded(true); setShowPlayButton(false); }}
-                        // @ts-ignore — webkit-playsinline for older iOS
-                        webkit-playsinline="true"
                     />
                 )}
 
@@ -718,13 +750,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                     /* eslint-disable-next-line @next/next/no-img-element */
                     <img
                         ref={imgRef}
-                        className={`h-full w-full object-cover ${videoLoaded ? 'opacity-100' : 'opacity-0'}`}
+                        className="absolute inset-0 h-full w-full object-cover z-10"
                         alt="Stream"
                     />
                 )}
 
-                {/* Detection overlay canvas — transparent, no blend mode, no object-cover */}
-                <canvas ref={overlayRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />
+                {/* Detection overlay canvas — z-20 to sit above the z-10 video */}
+                <canvas ref={overlayRef} className="absolute inset-0 w-full h-full z-20 pointer-events-none" />
 
                 {/* Manual play button for mobile autoplay restrictions */}
                 {showPlayButton && (
