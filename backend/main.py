@@ -84,12 +84,8 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     model_id=st_data.get("model_id", "latest"),
                     device_id=st_data.get("device_id", ""),
                     stream_id=st_id,
-                    skip_ai=(st_data.get("type") == "client_cam" and not st_data.get("cf_thumbnail_url")),
-                    cf_live_input_uid=st_data.get("cf_live_input_uid", ""),
-                    cf_whip_url=st_data.get("cf_whip_url", ""),
-                    cf_whep_url=st_data.get("cf_whep_url", ""),
-                    cf_thumbnail_url=st_data.get("cf_thumbnail_url", ""),
-                    cf_playback_url=st_data.get("cf_playback_url", ""),
+                    skip_ai=(st_data.get("type") == "client_cam"),
+                    cf_session_id=st_data.get("cf_session_id", ""),
                 )
                 print(f"[RESTORE] Restored stream {st_id} ({st_data.get('type', 'unknown')}) for {user_uid}")
     except Exception as exc:
@@ -532,18 +528,19 @@ async def list_streams(uid: str = "anonymous"):
 async def create_stream(req: StreamCreateRequest):
     print(f"\n[API] POST /api/streams - Received request to create stream: {req.name}, type: {req.stream_type}")
 
-    # Provision Cloudflare Stream Live Input for client_cam streams
-    cf_info = None
+    # Provision Cloudflare Calls session for client_cam streams
+    cf_session_id = ""
     if req.stream_type == "client_cam":
         try:
-            from app.cloudflare_stream import create_live_input
-            cf_info = create_live_input(name=req.name, uid=req.uid)
-            if cf_info:
-                print(f"[API] Created Cloudflare Live Input: {cf_info['live_input_uid']}")
+            from app.cloudflare_realtime import create_session
+            session = create_session()
+            if session:
+                cf_session_id = session["sessionId"]
+                print(f"[API] Created Cloudflare Calls session: {cf_session_id}")
             else:
-                print("[API] Cloudflare Stream not configured or failed — falling back to legacy WS relay")
+                print("[API] Cloudflare Calls not configured — using legacy WS relay only")
         except Exception as e:
-            print(f"[API] Cloudflare Stream provisioning failed: {e}")
+            print(f"[API] Cloudflare Calls provisioning failed: {e}")
 
     stream = stream_manager.add_stream(
         name=req.name,
@@ -552,11 +549,7 @@ async def create_stream(req: StreamCreateRequest):
         uid=req.uid,
         model_id=req.model_id,
         device_id=req.device_id,
-        cf_live_input_uid=cf_info["live_input_uid"] if cf_info else "",
-        cf_whip_url=cf_info["whip_url"] if cf_info else "",
-        cf_whep_url=cf_info["whep_url"] if cf_info else "",
-        cf_thumbnail_url=cf_info["thumbnail_url"] if cf_info else "",
-        cf_playback_url=cf_info["playback_url"] if cf_info else "",
+        cf_session_id=cf_session_id,
     )
     
     # Save to Firebase
@@ -569,11 +562,7 @@ async def create_stream(req: StreamCreateRequest):
             "model_id": req.model_id,
             "device_id": req.device_id,
             "created_at": __import__("datetime").datetime.now().isoformat(),
-            "cf_live_input_uid": stream.cf_live_input_uid,
-            "cf_whip_url": stream.cf_whip_url,
-            "cf_whep_url": stream.cf_whep_url,
-            "cf_thumbnail_url": stream.cf_thumbnail_url,
-            "cf_playback_url": stream.cf_playback_url,
+            "cf_session_id": cf_session_id,
         }
         requests.put(f"{FIREBASE_RTDB_BASE}/streams/{req.uid}/{stream.id}.json", json=stream_data)
     except Exception as e:
@@ -692,14 +681,14 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         logger.info(f"[WS OUT] Viewer disconnected from stream {stream_id}")
 
 
-# ==================== Detection-Only WebSocket (for Cloudflare WHEP streams) ====================
+# ==================== Detection-Only WebSocket (for Cloudflare Calls SFU viewers) ====================
 
 
 @app.websocket("/ws/detections/{stream_id}")
 async def websocket_detections(websocket: WebSocket, stream_id: str):
     """
-    Lightweight detection-only WebSocket for Cloudflare Stream viewers.
-    Video comes via WHEP (WebRTC), detections come here as JSON overlays.
+    Lightweight detection-only WebSocket for Cloudflare Calls viewers.
+    Video comes via SFU (WebRTC), detections come here as JSON overlays.
     """
     await websocket.accept()
     stream = stream_manager.get_stream(stream_id)
@@ -729,14 +718,122 @@ async def websocket_detections(websocket: WebSocket, stream_id: str):
         logger.info(f"[WS DET] Detection subscriber disconnected from stream {stream_id}")
 
 
+# ==================== Cloudflare Calls (Realtime SFU) API Endpoints ====================
+
+
+class CallsSessionRequest(BaseModel):
+    stream_id: str
+
+
+class CallsPublishRequest(BaseModel):
+    stream_id: str
+    session_id: str
+    sdp_offer: str
+    track_name: str
+
+
+class CallsSubscribeRequest(BaseModel):
+    stream_id: str
+    session_id: str
+    publisher_session_id: str
+    sdp_offer: str
+    track_name: str
+
+
+class CallsRenegotiateRequest(BaseModel):
+    session_id: str
+    sdp_offer: str
+
+
+@app.post("/api/calls/session")
+async def calls_create_session(req: CallsSessionRequest):
+    """Create a new Cloudflare Calls session for a stream."""
+    from app.cloudflare_realtime import create_session
+    session = create_session()
+    if not session:
+        return {"error": "Cloudflare Calls not configured or session creation failed"}, 500
+    return {"sessionId": session["sessionId"]}
+
+
+@app.post("/api/calls/publish")
+async def calls_publish(req: CallsPublishRequest):
+    """Push a track (publish video) to the Cloudflare Calls SFU."""
+    from app.cloudflare_realtime import push_track
+
+    result = push_track(req.session_id, req.sdp_offer, req.track_name)
+    if not result:
+        return {"error": "Failed to push track to Cloudflare Calls SFU"}, 500
+
+    # Store the publisher session ID on the stream so viewers can find it
+    stream = stream_manager.get_stream(req.stream_id)
+    if stream:
+        stream.cf_session_id = req.session_id
+        # Update Firebase with the session ID
+        try:
+            requests.patch(
+                f"{FIREBASE_RTDB_BASE}/streams/{stream.uid}/{stream.id}.json",
+                json={"cf_session_id": req.session_id},
+                timeout=4,
+            )
+        except Exception:
+            pass
+
+    return {
+        "sdp_answer": result.get("sdp_answer", ""),
+        "tracks": result.get("tracks", []),
+        "requiresImmediateRenegotiation": result.get("requiresImmediateRenegotiation", False),
+    }
+
+
+@app.post("/api/calls/subscribe")
+async def calls_subscribe(req: CallsSubscribeRequest):
+    """Pull a track (subscribe/view) from the Cloudflare Calls SFU."""
+    from app.cloudflare_realtime import pull_track
+
+    result = pull_track(
+        req.session_id, req.sdp_offer, req.track_name, req.publisher_session_id
+    )
+    if not result:
+        return {"error": "Failed to pull track from Cloudflare Calls SFU"}, 500
+
+    return {
+        "sdp_answer": result.get("sdp_answer", ""),
+        "tracks": result.get("tracks", []),
+        "requiresImmediateRenegotiation": result.get("requiresImmediateRenegotiation", False),
+    }
+
+
+@app.post("/api/calls/renegotiate")
+async def calls_renegotiate(req: CallsRenegotiateRequest):
+    """Renegotiate an existing Cloudflare Calls session."""
+    from app.cloudflare_realtime import renegotiate
+
+    answer = renegotiate(req.session_id, req.sdp_offer)
+    if answer is None:
+        return {"error": "Renegotiation failed"}, 500
+
+    return {"sdp_answer": answer}
+
+
+@app.get("/api/turn-credentials")
+def get_turn_credentials():
+    """Return TURN server credentials for WebRTC NAT traversal."""
+    from app.cloudflare_realtime import get_turn_credentials
+    return get_turn_credentials()
+
+
 # ==================== Alert Clips Endpoints ====================
+
+ALERT_CLIPS_DIR_MOUNT = os.path.join(os.path.dirname(__file__), "alert_clips")
+os.makedirs(ALERT_CLIPS_DIR_MOUNT, exist_ok=True)
+app.mount("/alert-clips", StaticFiles(directory=ALERT_CLIPS_DIR_MOUNT), name="alert_clips")
 
 
 @app.get("/api/clips/{uid}")
 def list_alert_clips(uid: str, stream_id: str = "", limit: int = 50):
     """
-    List saved alert clips for a user. Clips are saved when threats are
-    detected and then cleared on Cloudflare Stream-based live streams.
+    List saved alert clips for a user. Clips are saved from buffered frames
+    when threats are detected and then cleared on live streams.
     """
     if not uid or uid == "anonymous":
         return {"clips": []}
