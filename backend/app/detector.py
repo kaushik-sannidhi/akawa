@@ -1,6 +1,7 @@
 from ultralytics import YOLO
 import os
 import torch
+import threading
 
 # Weapon classes from both datasets that should trigger alerts
 # merged_dataset: rifle, handgun, knife
@@ -15,6 +16,7 @@ class WeaponDetector:
         If model_path is a directory name under runs/detect, loads from there.
         Otherwise auto-discovers the latest fine-tuned model, or falls back to yolo11m.pt.
         """
+        self.lock = threading.Lock()
         resolved_path = self._resolve_model_path(model_path)
 
         self.use_half = torch.cuda.is_available()
@@ -106,16 +108,17 @@ class WeaponDetector:
         Runs YOLO inference on a single frame with max speed optimizations.
         Returns a list of detection dicts with normalized bounding boxes.
         """
-        results = self.model.track(
-            frame,
-            verbose=False,
-            half=self.use_half,
-            imgsz=448,
-            persist=True,
-            tracker="botsort.yaml",
-            agnostic_nms=True,
-            max_det=20,
-        )
+        with self.lock:
+            results = self.model.track(
+                frame,
+                verbose=False,
+                half=self.use_half,
+                imgsz=448,
+                persist=True,
+                tracker="botsort.yaml",
+                agnostic_nms=True,
+                max_det=20,
+            )
 
         detections = []
         names = self.model.names
@@ -164,16 +167,17 @@ class WeaponDetector:
         """
         all_detections = []
 
-        results = self.model.track(
-            frames,
-            verbose=False,
-            half=self.use_half,
-            imgsz=448,
-            persist=True,
-            tracker="botsort.yaml",
-            agnostic_nms=True,
-            max_det=20,
-        )
+        with self.lock:
+            results = self.model.track(
+                frames,
+                verbose=False,
+                half=self.use_half,
+                imgsz=448,
+                persist=True,
+                tracker="botsort.yaml",
+                agnostic_nms=True,
+                max_det=20,
+            )
 
         names = self.model.names
         for r in results:
