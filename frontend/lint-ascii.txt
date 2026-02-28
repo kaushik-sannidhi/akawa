@@ -1,0 +1,32 @@
+
+C:\Users\kaush\IdeaProjects\AIWeapon\frontend\src\app\(dashboard)\dashboard\live\page.tsx
+   35:32  error  Error: Cannot call impure function during render
+
+`Date.now` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component happens to re-render. (https://react.dev/reference/rules/components-and-hooks-must-be-pure#components-and-hooks-must-be-idempotent).
+
+C:\Users\kaush\IdeaProjects\AIWeapon\frontend\src\app\(dashboard)\dashboard\live\page.tsx:35:32
+  33 |
+  34 |             // Connect WebSocket
+> 35 |             const id = `live-${Date.now()}`;
+     |                                ^^^^^^^^^^ Cannot call impure function
+  36 |             wsRef.current = new WebSocket(`ws://localhost:8000/ws/detect/${id}?model=${modelId}`);
+  37 |
+  38 |             wsRef.current.onmessage = (event) => {  react-hooks/purity
+  101:28  error  Error: Cannot call impure function during render
+
+`Date.now` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component happens to re-render. (https://react.dev/reference/rules/components-and-hooks-must-be-pure#components-and-hooks-must-be-idempotent).
+
+C:\Users\kaush\IdeaProjects\AIWeapon\frontend\src\app\(dashboard)\dashboard\live\page.tsx:101:28
+   99 |             wsRef.current.send(JSON.stringify({
+  100 |                 type: "frame",
+> 101 |                 timestamp: Date.now(),
+      |                            ^^^^^^^^^^ Cannot call impure function
+  102 |                 image: dataUrl
+  103 |             }));
+  104 |         }                                                  react-hooks/purity
+
+C:\Users\kaush\IdeaProjects\AIWeapon\frontend\src\components\VideoPlayer.tsx
+  3:29  warning  'useState' is defined but never used  @typescript-eslint/no-unused-vars
+
+??? 3 problems (2 errors, 1 warning)
+
