@@ -10,22 +10,22 @@ export default function DashboardOverview() {
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 h-full font-mono text-sm">
 
       {/* Top Stats Row */}
-      <div className="lg:col-span-12 grid grid-cols-2 md:grid-cols-4 gap-6">
+      <div className="lg:col-span-12 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-6">
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
           <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ TOTAL_FRAMES_ANALYZED ]</span>
-          <span className="text-3xl font-black text-[var(--color-data)]">{telemetry.scanned.toLocaleString()}</span>
+          <span className="text-2xl sm:text-3xl font-black text-[var(--color-data)] break-all">{telemetry.scanned.toLocaleString()}</span>
         </div>
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
           <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ ACTIVE_ANOMALIES ]</span>
-          <span className="text-3xl font-black text-[var(--color-alert)]">{telemetry.anomalies}</span>
+          <span className="text-2xl sm:text-3xl font-black text-[var(--color-alert)]">{telemetry.anomalies}</span>
         </div>
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
           <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ ONLINE_SENSORS ]</span>
-          <span className="text-3xl font-black text-[var(--color-data)]">{telemetry.activeNodes} / 24</span>
+          <span className="text-2xl sm:text-3xl font-black text-[var(--color-data)]">{telemetry.activeNodes} / 24</span>
         </div>
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
           <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ AVG_NODE_LATENCY ]</span>
-          <span className="text-3xl font-black text-[var(--color-data)]">{telemetry.latency}ms</span>
+          <span className="text-2xl sm:text-3xl font-black text-[var(--color-data)]">{telemetry.latency}ms</span>
         </div>
       </div>
 
@@ -39,7 +39,7 @@ export default function DashboardOverview() {
             <div className="w-3 h-3 bg-current animate-pulse" />
           </div>
           <div className="relative z-10 group-hover:text-black">
-            <h2 className="text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">Live Stream<br />Tracking</h2>
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">Live Stream<br />Tracking</h2>
             <p className="text-xs uppercase font-bold max-w-md opacity-80">
               CONNECT HARDWARE CAMERAS. DISTRIBUTE INFERENCE ACROSS MULTIPLE SENSORS WITH SUBLIMINAL LATENCY.
             </p>
@@ -51,7 +51,7 @@ export default function DashboardOverview() {
             <span className="font-bold border-b border-current pb-1 uppercase tracking-widest">[ INGEST_FORENSICS ]</span>
           </div>
           <div className="relative z-10">
-            <h2 className="text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">Pre-Recorded<br />Analysis</h2>
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">Pre-Recorded<br />Analysis</h2>
             <p className="text-xs uppercase font-bold max-w-md opacity-80">
               UPLOAD BULK CCTV ARCHIVES. RAPID ANALYSIS WITH FRAME-LEVEL TIMESTAMPS AND LOGGING EXPORTS.
             </p>

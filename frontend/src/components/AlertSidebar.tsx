@@ -74,7 +74,7 @@ export default function AlertSidebar({
                                                 e.stopPropagation();
                                                 onClear(alert.id);
                                             }}
-                                            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 text-[var(--color-silica)] hover:text-white transition-none bg-black border border-[var(--color-iron)] p-1"
+                                            className="absolute top-2 right-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-[var(--color-silica)] hover:text-white transition-none bg-black border border-[var(--color-iron)] p-1"
                                         >
                                             <X className="w-3 h-3" />
                                         </button>

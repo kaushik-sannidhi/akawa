@@ -15,6 +15,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const router = useRouter();
     const pathname = usePathname();
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
     useEffect(() => {
         if (!loading && !user) {
@@ -43,6 +44,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <div
                     className="fixed inset-0 bg-black/60 z-30 lg:hidden"
                     onClick={() => setSidebarOpen(false)}
+                />
+            )}
+
+            {/* Mobile top menu backdrop */}
+            {mobileNavOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+                    onClick={() => setMobileNavOpen(false)}
                 />
             )}
 
@@ -130,11 +139,56 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                             {pathname === '/dashboard' ? 'DASHBOARD OVERVIEW' : pathname.includes('live') ? 'LIVE CAMERAS' : pathname.includes('upload') ? 'UPLOAD VIDEO' : 'SETTINGS'}
                         </h2>
                     </div>
-                    <div className="flex items-center gap-2 sm:gap-4 bg-[var(--color-iron)] pl-2 pr-1 py-1">
-                        <span className="font-mono text-[8px] sm:text-[10px] text-white hidden sm:inline">OP_ID: {user.email}</span>
-                        <div className="w-4 h-4 bg-black border border-white flex items-center justify-center font-mono text-[8px] text-white font-bold">
-                            {user.email?.charAt(0).toUpperCase()}
+                    <div className="relative flex items-center gap-2 sm:gap-4 bg-[var(--color-iron)] pl-2 pr-1 py-1">
+                        <button
+                            onClick={() => setMobileNavOpen((prev) => !prev)}
+                            className="lg:hidden border border-white text-[8px] font-mono font-bold px-2 py-1 text-white"
+                            aria-label="Open dashboard menu"
+                        >
+                            MENU
+                        </button>
+                        <span className="font-mono text-[8px] sm:text-[10px] text-white hidden sm:inline max-w-[32vw] truncate">OP_ID: {user.email}</span>
+                        <div className="w-4 h-4 bg-black border border-white flex items-center justify-center font-mono text-[8px] text-white font-bold flex-shrink-0">
+                            {user.email?.charAt(0).toUpperCase() ?? "?"}
                         </div>
+
+                        {mobileNavOpen && (
+                            <div className="absolute top-[calc(100%+8px)] right-0 z-40 lg:hidden w-56 border-[2px] border-[var(--color-iron)] bg-black">
+                                <div className="px-3 py-2 text-[9px] font-mono text-[var(--color-silica)] border-b border-[var(--color-iron)]">
+                                    DASHBOARD_NAV
+                                </div>
+                                <nav className="flex flex-col text-[10px] font-mono font-bold tracking-widest">
+                                    <Link
+                                        href="/dashboard"
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`px-3 py-3 border-b border-[var(--color-iron)] ${pathname === '/dashboard' ? 'bg-[var(--color-data)] text-black' : 'text-[var(--color-data)]'}`}
+                                    >
+                                        [ OVERVIEW ]
+                                    </Link>
+                                    <Link
+                                        href="/dashboard/upload"
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`px-3 py-3 border-b border-[var(--color-iron)] ${pathname.includes('/upload') ? 'bg-[var(--color-data)] text-black' : 'text-[var(--color-data)]'}`}
+                                    >
+                                        [ UPLOAD VIDEO ]
+                                    </Link>
+                                    <Link
+                                        href="/dashboard/live"
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`px-3 py-3 border-b border-[var(--color-iron)] ${pathname.includes('/live') ? 'bg-[var(--color-alert)] text-black' : 'text-[var(--color-alert)]'}`}
+                                    >
+                                        [ LIVE CAMERAS ]
+                                    </Link>
+                                    <Link
+                                        href="/dashboard/settings"
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`px-3 py-3 ${pathname.includes('/settings') ? 'bg-[var(--color-data)] text-black' : 'text-[var(--color-data)]'}`}
+                                    >
+                                        [ SETTINGS ]
+                                    </Link>
+                                </nav>
+                            </div>
+                        )}
                     </div>
                 </header>
 
