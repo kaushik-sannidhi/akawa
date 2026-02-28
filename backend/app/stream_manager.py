@@ -20,7 +20,7 @@ ALERT_CLIPS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "aler
 os.makedirs(ALERT_CLIPS_DIR, exist_ok=True)
 
 # How many frames to batch before calling the sequence API
-SEQUENCE_LENGTH = 20
+SEQUENCE_LENGTH = 5
 
 # ─── Detection helpers ────────────────────────────────────────────────────────
 # The new API returns detection_type: "person" | "weapon" | "fall" | "violent_person"
@@ -515,6 +515,38 @@ class StreamManager:
                 f"({round(duration, 1)}s, {len(stream.alert_frames)} frames, "
                 f"threat={stream.latest_threat_type})"
             )
+
+            # ── Auto-generate incident report ──────────────────────
+            try:
+                from app.report_service import create_report
+                # Use the first frame as the snapshot for the report
+                frame_jpeg = stream.alert_frames[0][1] if stream.alert_frames else None
+                threat_dets = [d for d in stream.latest_detections[:5] if _is_threat_detection(d)]
+                top_conf = max((d.get("confidence", 0.0) for d in threat_dets), default=0.85)
+
+                threat_label_map = {
+                    "weapon": "Weapon Detected",
+                    "violence": "Violent Altercation Detected",
+                    "fall": "Fall / Medical Emergency Detected",
+                }
+                title = f"{threat_label_map.get(stream.latest_threat_type, stream.latest_threat_type.upper())} — {stream.name}"
+
+                create_report(
+                    uid=stream.uid,
+                    title=title,
+                    camera_name=stream.name,
+                    threat_type=stream.latest_threat_type,
+                    confidence=top_conf,
+                    vlm_summary="",  # VLM analysis will be patched in later via frontend
+                    frame_jpeg_bytes=frame_jpeg,
+                    clip_path=clip_path,
+                    detections=threat_dets,
+                    stream_id=stream.id,
+                    timestamp_ms=int(stream.alert_start_ts * 1000),
+                )
+            except Exception as report_exc:
+                logger.error(f"[REPORT] Auto-report generation failed for clip {event_id}: {report_exc}")
+
         except Exception as exc:
             logger.error(f"Failed to save alert clip for stream {stream.id}: {exc}")
         finally:

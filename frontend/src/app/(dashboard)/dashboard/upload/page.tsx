@@ -12,6 +12,27 @@ import { analyzeVideoWithVLM } from "@/lib/vlmApi";
 
 const WEAPON_CLASSES = ["gun", "knife", "violence"];
 
+const mapClassToThreatType = (className: string): "weapon" | "violence" | "fall" => {
+    const normalized = (className || "").toLowerCase();
+    if (normalized === "fall") return "fall";
+    if (normalized === "violence" || normalized === "fight" || normalized === "violent_person") return "violence";
+    return "weapon";
+};
+
+const makeReportTitle = (threatType: "weapon" | "violence" | "fall", sourceLabel: string) => {
+    if (threatType === "fall") return `Medical Emergency Fall Detected - ${sourceLabel}`;
+    if (threatType === "violence") return `Violent Altercation Detected - ${sourceLabel}`;
+    return `Weapon Detected - ${sourceLabel}`;
+};
+
+const blobToBase64 = async (blob?: Blob | null): Promise<string> => {
+    if (!blob) return "";
+    const buffer = await blob.arrayBuffer();
+    return btoa(
+        new Uint8Array(buffer).reduce((acc, byte) => acc + String.fromCharCode(byte), "")
+    );
+};
+
 export default function UploadAnalysisPage() {
     const [videoData, setVideoData] = useState<any>(null);
     const [pendingUploadData, setPendingUploadData] = useState<any>(null);
@@ -73,6 +94,15 @@ export default function UploadAnalysisPage() {
     // Debounce Firebase saves — only save 3s after last alert arrives
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const alertsRef = useRef<any[]>([]);
+    const videoDataRef = useRef<any>(null);
+
+    useEffect(() => {
+        alertsRef.current = alerts;
+    }, [alerts]);
+
+    useEffect(() => {
+        videoDataRef.current = videoData;
+    }, [videoData]);
 
     const debouncedSave = (alertsList: any[]) => {
         alertsRef.current = alertsList;
@@ -88,10 +118,10 @@ export default function UploadAnalysisPage() {
     useEffect(() => {
         const handleClipGenerated = async (e: Event) => {
             const customEvent = e as CustomEvent;
-            const { videoId, timestamp, videoBlob } = customEvent.detail;
+            const { videoId, timestamp, videoBlob, frameBlob } = customEvent.detail;
 
             // Ensure this clip belongs to the active video
-            if (videoData?.video_id !== videoId) return;
+            if (videoDataRef.current?.video_id !== videoId) return;
 
             // Mark the corresponding alert as currently analyzing
             setAlerts(prev => prev.map(a =>
@@ -112,6 +142,54 @@ export default function UploadAnalysisPage() {
                 debouncedSave(updated);
                 return updated;
             });
+
+            // Create an official incident report with clip/frame + summary.
+            const uid = auth.currentUser?.uid;
+            const currentVideo = videoDataRef.current;
+            if (!uid || !currentVideo) return;
+
+            const matchedAlert =
+                alertsRef.current.find((a) => Math.abs((a.startTimestamp ?? 0) - timestamp) < 5.0) || null;
+            const className = matchedAlert?.class_name || "weapon";
+            const confidence = typeof matchedAlert?.confidence === "number" ? matchedAlert.confidence : 0.85;
+            const threatType = mapClassToThreatType(className);
+
+            try {
+                const [clipB64, frameB64] = await Promise.all([
+                    blobToBase64(videoBlob),
+                    blobToBase64(frameBlob),
+                ]);
+
+                await fetch(`${getBaseUrl()}/api/reports`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        uid,
+                        title: makeReportTitle(threatType, currentVideo.filename || "Uploaded Video"),
+                        camera_name: currentVideo.filename || "Uploaded Video",
+                        stream_id: `upload_${currentVideo.video_id}`,
+                        threat_type: threatType,
+                        confidence,
+                        vlm_summary: response.text || "",
+                        frame_b64: frameB64,
+                        clip_b64: clipB64,
+                        detections: [
+                            {
+                                class_name: className,
+                                detection_type: threatType === "fall"
+                                    ? "fall"
+                                    : threatType === "violence"
+                                        ? "violent_person"
+                                        : "weapon",
+                                confidence,
+                            },
+                        ],
+                        timestamp: Math.round(timestamp * 1000),
+                    }),
+                });
+            } catch (reportErr) {
+                console.error("Failed to create upload incident report:", reportErr);
+            }
         };
 
         window.addEventListener('awca_clip_generated', handleClipGenerated);

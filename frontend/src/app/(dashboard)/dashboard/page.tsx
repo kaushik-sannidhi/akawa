@@ -30,7 +30,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* Main Action Modules */}
-      <div className="lg:col-span-8 grid grid-rows-2 gap-6">
+      <div className="lg:col-span-8 grid grid-rows-3 gap-6">
         <Link href="/dashboard/live" className="border-[2px] border-[var(--color-iron)] bg-black p-6 hover:bg-[var(--color-alert)] hover:border-[var(--color-alert)] transition-none group cursor-crosshair flex flex-col relative overflow-hidden">
           <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.5)_1px,transparent_1px)] bg-[size:32px_32px] opacity-20 pointer-events-none group-hover:bg-[linear-gradient(rgba(0,0,0,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(0,0,0,0.2)_1px,transparent_1px)]" />
 
@@ -54,6 +54,18 @@ export default function DashboardOverview() {
             <h2 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">Pre-Recorded<br />Analysis</h2>
             <p className="text-xs uppercase font-bold max-w-md opacity-80">
               UPLOAD BULK CCTV ARCHIVES. RAPID ANALYSIS WITH FRAME-LEVEL TIMESTAMPS AND LOGGING EXPORTS.
+            </p>
+          </div>
+        </Link>
+
+        <Link href="/dashboard/reports" className="border-[2px] border-[var(--color-iron)] bg-black p-6 hover:bg-[#ffd600] hover:border-[#ffd600] transition-none group cursor-crosshair flex flex-col relative overflow-hidden text-[var(--color-data)] hover:text-black">
+          <div className="flex justify-between items-start mb-auto relative z-10 w-full">
+            <span className="font-bold border-b border-current pb-1 uppercase tracking-widest">[ INCIDENT_ARCHIVE ]</span>
+          </div>
+          <div className="relative z-10">
+            <h2 className="text-3xl sm:text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">Official<br />Reports</h2>
+            <p className="text-xs uppercase font-bold max-w-md opacity-80">
+              REVIEW ALERT CLIPS, VLM SUMMARIES, CAMERA METADATA, AND DOWNLOADABLE PDF INCIDENT REPORTS.
             </p>
           </div>
         </Link>

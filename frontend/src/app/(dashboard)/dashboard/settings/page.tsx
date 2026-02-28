@@ -4,15 +4,15 @@ import { useState, useEffect } from "react";
 import { useSettings, AlertTypeConfig } from "@/context/SettingsContext";
 import { useTelemetry } from "@/context/TelemetryContext";
 import { getBaseUrl } from "@/lib/config";
-import { Plus, X, Mail } from "lucide-react";
+import { Plus, X, Mail, FileText } from "lucide-react";
 
 type ModelOption = { id: string; name: string };
 
 const ALERT_TYPE_META: Record<string, { label: string; icon: string; color: string; description: string }> = {
-    gun: { label: "GUN", icon: "🔫", color: "var(--color-alert)", description: "Rifle, handgun, or firearm detected" },
-    knife: { label: "KNIFE", icon: "🔪", color: "#ff9900", description: "Knife or bladed weapon detected" },
-    fall: { label: "FALL", icon: "⚠️", color: "#ff6600", description: "Person fall event detected" },
-    fight: { label: "FIGHT", icon: "👊", color: "#cc33ff", description: "Violence or brawl detected" },
+    gun: { label: "GUN", icon: "[WPN]", color: "var(--color-alert)", description: "Rifle, handgun, or firearm detected" },
+    knife: { label: "KNIFE", icon: "[BLD]", color: "#ff9900", description: "Knife or bladed weapon detected" },
+    fall: { label: "FALL", icon: "[FLL]", color: "#ff6600", description: "Person fall event detected" },
+    fight: { label: "FIGHT", icon: "[FGT]", color: "#cc33ff", description: "Violence or brawl detected" },
 };
 
 export default function SettingsPage() {
@@ -28,6 +28,7 @@ export default function SettingsPage() {
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [newContact, setNewContact] = useState<Record<string, string>>({ gun: "", knife: "", fall: "", fight: "" });
+    const [newReportContact, setNewReportContact] = useState("");
 
     const displayConfidence = Math.round(confidenceThreshold * 100);
 
@@ -78,6 +79,24 @@ export default function SettingsPage() {
     const removeContact = (type: string, email: string) => {
         const current = notificationSettings.alert_types[type as keyof typeof notificationSettings.alert_types];
         updateAlertType(type, { contacts: current.contacts.filter((c) => c !== email) });
+    };
+
+    const addReportContact = () => {
+        const email = newReportContact.trim();
+        if (!email || !email.includes("@")) return;
+        if (notificationSettings.report_email_contacts.includes(email)) return;
+        setNotificationSettings({
+            ...notificationSettings,
+            report_email_contacts: [...notificationSettings.report_email_contacts, email],
+        });
+        setNewReportContact("");
+    };
+
+    const removeReportContact = (email: string) => {
+        setNotificationSettings({
+            ...notificationSettings,
+            report_email_contacts: notificationSettings.report_email_contacts.filter((c) => c !== email),
+        });
     };
 
     return (
@@ -195,6 +214,76 @@ export default function SettingsPage() {
                                 <p className="text-[10px] text-[var(--color-silica)] mt-2">
                                     EMAILS ARE SENT VIA CLOUDFLARE WORKERS. THIS IS YOUR PRIMARY ALERT DESTINATION.
                                 </p>
+                            </div>
+                        </div>
+
+                        <div className="border border-[var(--color-iron)] p-4">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-3">
+                                    <FileText className="w-4 h-4 text-[var(--color-data)]" />
+                                    <span className="font-bold text-xs">REPORT GENERATION EMAILS</span>
+                                </div>
+                                <label className="flex items-center gap-2 cursor-crosshair">
+                                    <span className="text-[10px] text-[var(--color-silica)]">
+                                        {notificationSettings.report_email_enabled ? "ENABLED" : "DISABLED"}
+                                    </span>
+                                    <input
+                                        type="checkbox"
+                                        checked={notificationSettings.report_email_enabled}
+                                        onChange={(e) => setNotificationSettings({
+                                            ...notificationSettings,
+                                            report_email_enabled: e.target.checked,
+                                        })}
+                                        className="w-4 h-4 appearance-none border-[1px] border-[var(--color-iron)] checked:bg-[var(--color-data)] checked:border-[var(--color-data)] cursor-crosshair focus:outline-none"
+                                    />
+                                </label>
+                            </div>
+
+                            <div className={notificationSettings.report_email_enabled ? "" : "opacity-40 pointer-events-none"}>
+                                <p className="text-[10px] text-[var(--color-silica)] mb-3 normal-case">
+                                    When enabled, every generated incident report sends an email containing report metadata and links to the PDF and clip.
+                                </p>
+
+                                {notificationSettings.report_email_contacts.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 mb-3">
+                                        {notificationSettings.report_email_contacts.map((contact) => (
+                                            <div
+                                                key={contact}
+                                                className="flex items-center gap-1 bg-[var(--color-dim)] border border-[var(--color-iron)] px-2 py-1 text-[10px] text-[var(--color-data)]"
+                                            >
+                                                <span className="normal-case">{contact}</span>
+                                                <button
+                                                    onClick={() => removeReportContact(contact)}
+                                                    className="text-[var(--color-silica)] hover:text-[var(--color-alert)] ml-1"
+                                                >
+                                                    <X className="w-3 h-3" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="flex gap-2">
+                                    <input
+                                        type="email"
+                                        placeholder="ADD REPORT EMAIL CONTACT..."
+                                        value={newReportContact}
+                                        onChange={(e) => setNewReportContact(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") {
+                                                e.preventDefault();
+                                                addReportContact();
+                                            }
+                                        }}
+                                        className="flex-1 bg-black border border-[var(--color-iron)] text-[var(--color-data)] px-3 py-2 font-mono text-[10px] tracking-widest focus:border-[var(--color-data)] outline-none normal-case"
+                                    />
+                                    <button
+                                        onClick={addReportContact}
+                                        className="px-3 py-2 border border-[var(--color-iron)] text-[var(--color-data)] hover:bg-[var(--color-data)] hover:text-black transition-none"
+                                    >
+                                        <Plus className="w-3 h-3" />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>

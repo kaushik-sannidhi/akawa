@@ -23,7 +23,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
         try {
             if (view === "login") {
                 await signInWithEmailAndPassword(auth, email, password);
-                setView("onboarding");
+                router.push("/dashboard");
             } else if (view === "signup") {
                 await createUserWithEmailAndPassword(auth, email, password);
                 setView("onboarding");
@@ -35,6 +35,8 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                         await set(ref(db, `alerts_config/${user.uid}`), {
                             email: email,
                             email_enabled: true,
+                            report_email_enabled: false,
+                            report_email_contacts: [],
                             alert_types: {
                                 gun: { ...defaultAlertType },
                                 knife: { ...defaultAlertType },
@@ -212,7 +214,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                     <>
 
                                         <div className="bg-[var(--color-dim)] border border-[var(--color-iron)] p-3 mt-2">
-                                            <p className="text-[10px] text-[var(--color-data)] font-bold mb-1">📧 EMAIL ALERTS: ENABLED BY DEFAULT</p>
+                                            <p className="text-[10px] text-[var(--color-data)] font-bold mb-1">[MSG] EMAIL ALERTS: ENABLED BY DEFAULT</p>
                                             <p className="text-[10px] text-[var(--color-silica)] normal-case">
                                                 Security alerts will be sent to <span className="text-[var(--color-data)]">{email}</span> automatically. You can manage all alert settings from the dashboard.
                                             </p>

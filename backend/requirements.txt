@@ -8,3 +8,6 @@ numpy
 python-multipart
 websockets
 PyJWT
+boto3
+reportlab
+httpx

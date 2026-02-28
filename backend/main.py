@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 import json
 import base64
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from app.telemetry import telemetry_service
 from app.stream_manager import stream_manager, SEQUENCE_LENGTH
@@ -1001,6 +1001,10 @@ ALERT_CLIPS_DIR_MOUNT = os.path.join(os.path.dirname(__file__), "alert_clips")
 os.makedirs(ALERT_CLIPS_DIR_MOUNT, exist_ok=True)
 app.mount("/alert-clips", StaticFiles(directory=ALERT_CLIPS_DIR_MOUNT), name="alert_clips")
 
+REPORTS_DIR_MOUNT = os.path.join(os.path.dirname(__file__), "reports")
+os.makedirs(REPORTS_DIR_MOUNT, exist_ok=True)
+app.mount("/reports", StaticFiles(directory=REPORTS_DIR_MOUNT), name="reports")
+
 
 @app.get("/api/clips/{uid}")
 def list_alert_clips(uid: str, stream_id: str = "", limit: int = 50):
@@ -1020,3 +1024,133 @@ def list_alert_clips(uid: str, stream_id: str = "", limit: int = 50):
         return {"clips": clips[:max(1, min(limit, 200))]}
     except Exception as exc:
         return {"clips": [], "error": str(exc)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Incident Reports
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CreateReportRequest(BaseModel):
+    uid: str
+    title: str
+    camera_name: str
+    stream_id: str = ""
+    threat_type: str
+    confidence: float
+    vlm_summary: str = ""
+    frame_b64: str = ""
+    clip_b64: str = ""
+    detections: List[Dict[str, Any]] = Field(default_factory=list)
+    timestamp: Optional[int] = None
+
+
+@app.post("/api/reports")
+async def create_report_endpoint(req: CreateReportRequest):
+    """Create an incident report from a frontend-submitted alert."""
+    from app.report_service import create_report
+
+    frame_bytes = None
+    if req.frame_b64:
+        try:
+            frame_bytes = base64.b64decode(req.frame_b64)
+        except Exception:
+            pass
+
+    clip_bytes = None
+    if req.clip_b64:
+        try:
+            clip_bytes = base64.b64decode(req.clip_b64)
+        except Exception:
+            pass
+
+    report = await anyio.to_thread.run_sync(
+        lambda: create_report(
+            uid=req.uid,
+            title=req.title,
+            camera_name=req.camera_name,
+            threat_type=req.threat_type,
+            confidence=req.confidence,
+            vlm_summary=req.vlm_summary,
+            frame_jpeg_bytes=frame_bytes,
+            clip_bytes=clip_bytes,
+            detections=req.detections,
+            stream_id=req.stream_id,
+            timestamp_ms=req.timestamp,
+        )
+    )
+    if report:
+        return {"status": "success", "report": report}
+    return {"status": "error", "message": "Failed to create report"}
+
+
+class UpdateReportVLMRequest(BaseModel):
+    uid: str
+    report_id: str
+    vlm_summary: str
+    # Optionally regenerate the PDF with the new summary
+    title: str = ""
+    camera_name: str = ""
+    threat_type: str = ""
+    confidence: float = 0.0
+    timestamp: int = 0
+    frame_b64: str = ""
+
+
+@app.patch("/api/reports/{uid}/{report_id}")
+async def update_report_vlm_endpoint(uid: str, report_id: str, req: UpdateReportVLMRequest):
+    """Patch a report with VLM analysis (and regenerated PDF)."""
+    from app.report_service import update_report_vlm
+    from app.report_generator import generate_report_pdf
+
+    pdf_bytes = None
+    if req.vlm_summary and req.title:
+        frame_bytes = None
+        if req.frame_b64:
+            try:
+                frame_bytes = base64.b64decode(req.frame_b64)
+            except Exception:
+                pass
+        try:
+            pdf_bytes = generate_report_pdf(
+                title=req.title,
+                camera_name=req.camera_name,
+                timestamp_ms=req.timestamp or int(_time.time() * 1000),
+                threat_type=req.threat_type,
+                confidence=req.confidence,
+                vlm_summary=req.vlm_summary,
+                frame_jpeg_bytes=frame_bytes,
+            )
+        except Exception as exc:
+            logger.error(f"PDF regen failed: {exc}")
+
+    ok = await anyio.to_thread.run_sync(
+        lambda: update_report_vlm(uid, report_id, req.vlm_summary, pdf_bytes)
+    )
+    return {"status": "success" if ok else "error"}
+
+
+@app.get("/api/reports/{uid}")
+def list_reports_endpoint(uid: str, limit: int = 100):
+    """List all reports for a user."""
+    from app.report_service import list_reports
+    if not uid or uid == "anonymous":
+        return {"reports": []}
+    return {"reports": list_reports(uid, limit)}
+
+
+@app.get("/api/reports/{uid}/{report_id}")
+def get_report_endpoint(uid: str, report_id: str):
+    """Get a single report."""
+    from app.report_service import get_report
+    data = get_report(uid, report_id)
+    if data:
+        return {"report": data}
+    return {"error": "Report not found"}
+
+
+@app.delete("/api/reports/{uid}/{report_id}")
+def delete_report_endpoint(uid: str, report_id: str):
+    """Delete a report."""
+    from app.report_service import delete_report
+    ok = delete_report(uid, report_id)
+    return {"status": "success" if ok else "error"}

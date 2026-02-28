@@ -21,6 +21,8 @@ export type AlertTypesMap = {
 export type NotificationSettings = {
     email: string;
     email_enabled: boolean;
+    report_email_enabled: boolean;
+    report_email_contacts: string[];
     alert_types: AlertTypesMap;
 };
 
@@ -29,6 +31,8 @@ const DEFAULT_ALERT_TYPE: AlertTypeConfig = { email: true, contacts: [] };
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     email: "",
     email_enabled: true,
+    report_email_enabled: false,
+    report_email_contacts: [],
     alert_types: {
         gun: { email: true, contacts: [] },
         knife: { email: true, contacts: [] },
@@ -98,6 +102,10 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
                         setNotificationSettings({
                             email: data.email || user.email || "",
                             email_enabled: data.email_enabled ?? true,
+                            report_email_enabled: data.report_email_enabled ?? false,
+                            report_email_contacts: Array.isArray(data.report_email_contacts)
+                                ? data.report_email_contacts
+                                : [],
                             alert_types: {
                                 gun: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.gun },
                                 knife: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.knife },

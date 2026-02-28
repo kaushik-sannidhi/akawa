@@ -165,6 +165,12 @@ export default function VideoPlayer({
             renderCanvas.width = hiddenVideo.videoWidth;
             renderCanvas.height = hiddenVideo.videoHeight;
             const ctx = renderCanvas.getContext("2d");
+            if (ctx && hiddenVideo.readyState >= 2) {
+                ctx.drawImage(hiddenVideo, 0, 0, renderCanvas.width, renderCanvas.height);
+            }
+            const frameBlob = await new Promise<Blob | null>((resolve) =>
+                renderCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.82)
+            );
 
             // captureStream 15fps
             const captureStream = (renderCanvas as any).captureStream(15);
@@ -206,7 +212,8 @@ export default function VideoPlayer({
                 detail: {
                     videoId,
                     timestamp,
-                    videoBlob: clipBlob
+                    videoBlob: clipBlob,
+                    frameBlob
                 }
             });
             window.dispatchEvent(event);

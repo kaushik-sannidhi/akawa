@@ -1,10 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { Trash2, Play, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
 import { joinMeeting, type RealtimeSession } from "@/lib/cloudflare-calls";
+import { 
+    RealtimeKitProvider, 
+    useRealtimeKitMeeting, 
+    useRealtimeKitSelector 
+} from "@cloudflare/realtimekit-react";
 
 interface StreamNodeProps {
     stream: any;
@@ -15,36 +20,224 @@ interface StreamNodeProps {
     isPrimary?: boolean;
 }
 
-export default function StreamNode({ stream, onDelete, onDetections, onSelect, onDoubleClick, isPrimary = false }: StreamNodeProps) {
+/**
+ * Hook to handle frame capture and sending to AI backend via WebSocket
+ */
+function useAiInference(streamId: string, enabled: boolean, videoRef: React.RefObject<HTMLVideoElement | null>, setIsStreaming: (s: boolean) => void) {
+    useEffect(() => {
+        if (!enabled) return;
+
+        let alive = true;
+        let aiWs: WebSocket | null = null;
+        let aiTimer: ReturnType<typeof setInterval> | null = null;
+
+        const connectAi = () => {
+            const wsUrl = getWsUrl();
+            aiWs = new WebSocket(`${wsUrl}/ws/stream_in/${streamId}`);
+            aiWs.binaryType = "arraybuffer";
+
+            const canvas = document.createElement("canvas");
+            const ctx = canvas.getContext("2d")!;
+            let sending = false;
+
+            aiWs.onopen = () => {
+                setIsStreaming(true);
+                // AI Loop: ~10 FPS (100ms) for low latency, optimized so main thread doesn't lag
+                aiTimer = setInterval(async () => {
+                    if (sending || !aiWs || aiWs.readyState !== WebSocket.OPEN) return;
+                    if (!videoRef.current || videoRef.current.readyState < 2) return;
+                    
+                    const vw = videoRef.current.videoWidth;
+                    const vh = videoRef.current.videoHeight;
+                    if (!vw || !vh) return;
+                    
+                    sending = true;
+                    try {
+                        const targetWidth = 480;
+                        const targetHeight = Math.round((480 / vw) * vh);
+                        
+                        // Use OffscreenCanvas and createImageBitmap for performance if available
+                        if (typeof OffscreenCanvas !== "undefined" && typeof createImageBitmap !== "undefined") {
+                            const offCanvas = new OffscreenCanvas(targetWidth, targetHeight);
+                            const offCtx = offCanvas.getContext("2d");
+                            if (offCtx) {
+                                const bitmap = await createImageBitmap(videoRef.current);
+                                offCtx.drawImage(bitmap, 0, 0, targetWidth, targetHeight);
+                                bitmap.close();
+                                const blob = await offCanvas.convertToBlob({ type: "image/jpeg", quality: 0.45 });
+                                if (blob && aiWs.readyState === WebSocket.OPEN) aiWs.send(blob);
+                            }
+                        } else {
+                            canvas.width = targetWidth;
+                            canvas.height = targetHeight;
+                            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                            const blob = await new Promise<Blob | null>(r =>
+                                canvas.toBlob(b => r(b), "image/jpeg", 0.45)
+                            );
+                            if (blob && aiWs.readyState === WebSocket.OPEN) aiWs.send(blob);
+                        }
+                    } catch (e) {
+                        console.error("[useAiInference] Frame capture error:", e);
+                    } finally {
+                        sending = false;
+                    }
+                }, 100); 
+            };
+
+            aiWs.onclose = () => {
+                if (aiTimer) clearInterval(aiTimer);
+                if (alive) setTimeout(connectAi, 3000);
+            };
+        };
+
+        connectAi();
+        return () => {
+            alive = false;
+            if (aiTimer) clearInterval(aiTimer);
+            aiWs?.close();
+        };
+    }, [enabled, streamId, videoRef, setIsStreaming]);
+}
+
+/**
+ * Remote Participant Stream Component
+ */
+function RemoteStream({ audioMuted, setVideoLoaded, setIsStreaming, setNetState }: any) {
+    const { meeting } = useRealtimeKitMeeting();
+    const participants = useRealtimeKitSelector(m => m.participants);
     const videoRef = useRef<HTMLVideoElement>(null);
+    const [showPlayButton, setShowPlayButton] = useState(false);
+
+    useEffect(() => {
+        if (!meeting || !participants) return;
+
+        // Find the first participant who is publishing video
+        const joinedArr = participants.joined.toArray();
+        const publisher = joinedArr.find((p: any) => p.videoTrack);
+        
+        if (publisher && videoRef.current) {
+            const videoTrack = publisher.videoTrack!;
+            const audioTrack = publisher.audioTrack;
+            
+            const ms = new MediaStream([videoTrack]);
+            if (audioTrack) ms.addTrack(audioTrack);
+            
+            videoRef.current.srcObject = ms;
+            videoRef.current.muted = audioMuted;
+            videoRef.current.play().catch(() => setShowPlayButton(true));
+            
+            setVideoLoaded(true);
+            setIsStreaming(true);
+            setNetState("streaming_sfu");
+        }
+    }, [meeting, participants, audioMuted, setVideoLoaded, setIsStreaming, setNetState]);
+
+    const handlePlay = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (videoRef.current) {
+            videoRef.current.play().then(() => setShowPlayButton(false)).catch(console.error);
+        }
+    };
+
+    return (
+        <>
+            <video
+                ref={videoRef}
+                className="absolute inset-0 h-full w-full object-cover z-10"
+                style={{ transform: "translateZ(0)" }}
+                autoPlay playsInline
+                muted={audioMuted}
+            />
+            {showPlayButton && (
+                <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 cursor-pointer" onClick={handlePlay}>
+                    <div className="w-16 h-16 rounded-full bg-white/20 border-2 border-white flex items-center justify-center backdrop-blur-sm">
+                        <Play className="w-8 h-8 text-white ml-1" fill="white" />
+                    </div>
+                </div>
+            )}
+        </>
+    );
+}
+
+/**
+ * Local Participant (Owner) Stream Component
+ */
+function LocalStream({ streamId, setVideoLoaded, setIsStreaming, setNetState }: any) {
+    const { meeting } = useRealtimeKitMeeting();
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    // 1. Enable media
+    useEffect(() => {
+        if (!meeting) return;
+        const start = async () => {
+            try {
+                await meeting.self.enableVideo();
+                await meeting.self.enableAudio();
+                setNetState("streaming_sfu");
+            } catch (err) {
+                console.error("[RTK] local start failed:", err);
+            }
+        };
+        start();
+    }, [meeting, setNetState]);
+
+    // 2. Attach local track to preview
+    useEffect(() => {
+        if (!meeting || !videoRef.current) return;
+        const attach = () => {
+            const track = meeting.self.videoTrack;
+            if (track && videoRef.current) {
+                videoRef.current.srcObject = new MediaStream([track]);
+                setVideoLoaded(true);
+                setIsStreaming(true);
+            }
+        };
+        attach();
+        meeting.self.on("videoUpdate" as any, attach);
+    }, [meeting, setVideoLoaded, setIsStreaming]);
+
+    // 3. AI Inference Loop (Owner side)
+    useAiInference(streamId, true, videoRef, setIsStreaming);
+
+    return (
+        <video
+            ref={videoRef}
+            className="absolute inset-0 h-full w-full object-cover z-10"
+            style={{ transform: "translateZ(0)" }}
+            autoPlay playsInline
+            muted={true}
+        />
+    );
+}
+
+export default function StreamNode({ stream, onDelete, onDetections, onSelect, onDoubleClick, isPrimary = false }: StreamNodeProps) {
     const overlayRef = useRef<HTMLCanvasElement>(null);
-    const localStreamRef = useRef<MediaStream | null>(null);
     const lastDetRef = useRef<string>("");
 
     const [videoLoaded, setVideoLoaded] = useState(false);
     const [isStreaming, setIsStreaming] = useState(false);
-    const [showPlayButton, setShowPlayButton] = useState(false);
     const [netState, setNetState] = useState("init");
     const [fallbackFrame, setFallbackFrame] = useState("");
     const [localDeviceId, setLocalDeviceId] = useState("");
     const [micEnabled, setMicEnabled] = useState(true);
     const [audioMuted, setAudioMuted] = useState(false);
+    const [rtkClient, setRtkClient] = useState<any>(null);
 
     const isClientCam = stream.type === "client_cam";
-    const isOwner = isClientCam && stream.device_id === localDeviceId;
     const hasMeeting = !!stream.cf_meeting_id;
 
-    // ── Device ID ──
     useEffect(() => {
         let id = localStorage.getItem("device_id");
         if (!id) {
             id = Math.random().toString(36).substring(2, 15);
             localStorage.setItem("device_id", id);
         }
-        queueMicrotask(() => setLocalDeviceId(id!));
+        setLocalDeviceId(id);
     }, []);
 
-    // ── Draw detection overlays (throttled via ref) ──
+    const isOwner = useMemo(() => isClientCam && stream.device_id === localDeviceId, [isClientCam, stream.device_id, localDeviceId]);
+
+    // ── Detections Drawing ──
     const drawDetections = useCallback((detections: any[]) => {
         const canvas = overlayRef.current;
         if (!canvas) return;
@@ -75,14 +268,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                 || det.class_name === "gun"
                 || det.class_name === "weapon";
 
-            let color = "#FFFFFF"; // Person (White)
-            if (detType === "violent_person") color = "#CC33FF"; // Violence (Purple)
-            else if (detType === "fall") color = "#FF9900"; // Fall (Orange)
-            else if (isThreat) color = "#FF3300"; // Weapon (Red)
-            else if (isKnife) color = "#FFFF00"; // Knife (Yellow)
+            let color = "#FFFFFF"; 
+            if (detType === "violent_person") color = "#CC33FF"; 
+            else if (detType === "fall") color = "#FF9900"; 
+            else if (isThreat) color = "#FF3300"; 
+            else if (isKnife) color = "#FFFF00"; 
 
             const corner = Math.max(6, 10 * scale);
-
             ctx.strokeStyle = color;
             ctx.lineWidth = Math.max(2, 2 * scale);
             ctx.beginPath();
@@ -121,8 +313,6 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                         setIsStreaming(true);
                     }
                     if (data.detections) {
-                        console.log(`[StreamNode] Detections for ${stream.name}:`, data.detections, "Threat:", data.threat_type);
-                        // Throttle: skip if identical to last
                         const key = JSON.stringify(data.detections.map((d: any) => d.class_name + d.confidence.toFixed(2)));
                         if (key !== lastDetRef.current) {
                             lastDetRef.current = key;
@@ -141,177 +331,40 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
         return () => { alive = false; if (pingTimer) clearInterval(pingTimer); detWs?.close(); };
     }, [stream.id, hasMeeting, drawDetections, onDetections]);
 
-    // ── Realtime Kit: Camera owner publishes via SDK + sends frames for AI ──
+    // ── Realtime Kit Session ──
     useEffect(() => {
-        if (!isClientCam || !isOwner) return;
-
+        if (!hasMeeting || !isClientCam || !localDeviceId) return;
         let alive = true;
         let session: RealtimeSession | null = null;
-        let aiWs: WebSocket | null = null;
-        let aiTimer: ReturnType<typeof setInterval> | null = null;
-
-        const start = async () => {
-            try {
-                setNetState("starting_camera");
-                const media = await navigator.mediaDevices.getUserMedia({
-                    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24 } },
-                    audio: true,
-                });
-                if (!alive) { media.getTracks().forEach(t => t.stop()); return; }
-
-                localStreamRef.current = media;
-                if (videoRef.current) {
-                    videoRef.current.srcObject = media;
-                    videoRef.current.muted = true;
-                    await videoRef.current.play().catch(() => undefined);
-                    setVideoLoaded(true);
-                }
-
-                // Publish via Realtime Kit SDK
-                if (hasMeeting) {
-                    setNetState("connecting_sfu");
-                    try {
-                        session = await joinMeeting(stream.id, stream.name || "Publisher", localDeviceId);
-                        await session.meeting.self.enableVideo();
-                        await session.meeting.self.enableAudio();
-                        setNetState("streaming_sfu");
-                    } catch (err) {
-                        console.error("[RTK] publish failed, falling back to WS:", err);
-                        session = null;
-                    }
-                }
-
-                // Send frames to backend for AI at ~5 FPS (200ms) to reduce lag
-                setNetState(session ? "streaming_sfu" : "connecting_ws");
-                const wsUrl = getWsUrl();
-                aiWs = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
-                aiWs.binaryType = "arraybuffer";
-
-                const canvas = document.createElement("canvas");
-                const ctx = canvas.getContext("2d")!;
-                let sending = false;
-
-                aiWs.onopen = () => {
-                    setIsStreaming(true);
-                    if (!session) setNetState("streaming");
-                    aiTimer = setInterval(async () => {
-                        if (sending || !videoRef.current || !aiWs || aiWs.readyState !== WebSocket.OPEN) return;
-                        if (videoRef.current.readyState < 2) return;
-                        const vw = videoRef.current.videoWidth;
-                        const vh = videoRef.current.videoHeight;
-                        if (!vw || !vh) return;
-                        sending = true;
-                        canvas.width = 480;
-                        canvas.height = Math.round((480 / vw) * vh);
-                        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-                        const blob = await new Promise<Blob | null>(r =>
-                            canvas.toBlob(b => r(b), "image/jpeg", 0.45),
-                        );
-                        if (blob && aiWs?.readyState === WebSocket.OPEN) aiWs.send(blob);
-                        sending = false;
-                    }, 200); // 5 FPS for AI — much less bandwidth
-                };
-                aiWs.onclose = () => {
-                    if (!session) setNetState("reconnecting");
-                    if (alive && !session) setTimeout(start, 3000);
-                };
-            } catch (err) {
-                console.error("[StreamNode] start failed:", err);
-                setNetState("provider_error");
-                if (alive) setTimeout(start, 5000);
-            }
-        };
-
-        start();
-        return () => {
-            alive = false;
-            if (aiTimer) clearInterval(aiTimer);
-            aiWs?.close();
-            session?.stop();
-            if (localStreamRef.current) {
-                localStreamRef.current.getTracks().forEach(t => t.stop());
-                localStreamRef.current = null;
-            }
-        };
-    }, [isClientCam, isOwner, hasMeeting, stream.id, stream.name, localDeviceId]);
-
-    // ── Realtime Kit: Viewer subscribes via SDK ──
-    useEffect(() => {
-        if (isOwner || !hasMeeting || !isClientCam) return;
-
-        let alive = true;
-        let session: RealtimeSession | null = null;
-
-        const start = async () => {
+        const init = async () => {
             try {
                 setNetState("connecting_sfu");
-                session = await joinMeeting(stream.id, "Viewer", localDeviceId);
+                session = await joinMeeting(stream.id, isOwner ? (stream.name || "Publisher") : "Viewer", localDeviceId);
                 if (!alive) { session.stop(); return; }
-
-                // Listen for remote participant video
-                const meeting = session.meeting;
-                const attachRemote = () => {
-                    const joined = meeting.participants.joined;
-                    if (joined && typeof joined.toArray === "function") {
-                        const remotes = joined.toArray();
-                        for (const p of remotes) {
-                            const videoTrack = p.videoTrack;
-                            if (videoTrack && videoRef.current) {
-                                const ms = new MediaStream([videoTrack]);
-                                const audioTrack = p.audioTrack;
-                                if (audioTrack) ms.addTrack(audioTrack);
-                                videoRef.current.srcObject = ms;
-                                videoRef.current.muted = audioMuted;
-                                videoRef.current.play().catch(() => setShowPlayButton(true));
-                                setVideoLoaded(true);
-                                setIsStreaming(true);
-                                setNetState("streaming_sfu");
-                                return;
-                            }
-                        }
-                    }
-                };
-
-                // Try immediately, then listen for updates
-                attachRemote();
-                meeting.participants.joined.on?.("participantJoined" as any, attachRemote);
-                meeting.participants.joined.on?.("videoUpdate" as any, attachRemote);
-                meeting.participants.joined.on?.("audioUpdate" as any, attachRemote);
-
-                // Also poll briefly in case events don't fire
-                const poll = setInterval(() => {
-                    if (!alive) { clearInterval(poll); return; }
-                    attachRemote();
-                }, 2000);
-                setTimeout(() => clearInterval(poll), 30000);
-
+                setRtkClient(session.meeting);
             } catch (err) {
-                console.error("[RTK] view failed:", err);
+                console.error("[RTK] init failed:", err);
                 setNetState("sfu_error");
-                if (alive) setTimeout(start, 5000);
+                if (alive) setTimeout(init, 5000);
             }
         };
-
-        start();
+        init();
         return () => { alive = false; session?.stop(); };
-    }, [isOwner, hasMeeting, isClientCam, stream.id, localDeviceId, audioMuted]);
+    }, [hasMeeting, isClientCam, stream.id, stream.name, localDeviceId, isOwner]);
 
-    // ── Mic toggle (owner only) ──
     const toggleMic = (e: React.MouseEvent) => {
         e.stopPropagation();
-        if (!localStreamRef.current) return;
-        const audioTracks = localStreamRef.current.getAudioTracks();
-        const next = !micEnabled;
-        audioTracks.forEach(t => { t.enabled = next; });
-        setMicEnabled(next);
+        if (rtkClient?.self) {
+            const next = !micEnabled;
+            if (next) rtkClient.self.enableAudio();
+            else rtkClient.self.disableAudio();
+            setMicEnabled(next);
+        }
     };
 
-    // ── Audio toggle (viewer) ──
     const toggleAudio = (e: React.MouseEvent) => {
         e.stopPropagation();
-        const next = !audioMuted;
-        setAudioMuted(next);
-        if (videoRef.current) videoRef.current.muted = next;
+        setAudioMuted(!audioMuted);
     };
 
     const handleDelete = (e: React.MouseEvent) => {
@@ -319,20 +372,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
         if (window.confirm(`Terminate ${stream.name}?`)) onDelete(stream.id, true);
     };
 
-    const handleClick = (e: React.MouseEvent) => {
-        // Double-click handled by onDoubleClick prop
-        if (e.detail === 1 && onSelect) onSelect();
-    };
-
-    const useVideoElement = isOwner || (hasMeeting && isClientCam);
-
     return (
         <motion.div
             layout
             initial={{ opacity: 0, scale: 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ type: "spring", stiffness: 400, damping: 35, mass: 0.6 }}
-            onClick={handleClick}
+            onClick={() => onSelect?.()}
             onDoubleClick={(e) => { e.stopPropagation(); onDoubleClick?.(); }}
             className={`relative w-full h-full flex-1 min-h-0 bg-[#0A0A0A] flex flex-col group cursor-pointer origin-center border-[2px] overflow-hidden ${isPrimary ? "border-[var(--color-data)]" : "border-[var(--color-dim)] hover:border-[var(--color-iron)]"}`}
         >
@@ -342,14 +388,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                     {stream.name} [{stream.type.toUpperCase()}]{hasMeeting ? " ⚡LIVE" : ""}
                 </span>
                 <div className="flex gap-1">
-                    {/* Audio controls */}
                     {isOwner && (
-                        <button onClick={toggleMic} className="bg-black text-[var(--color-silica)] hover:text-white border border-[var(--color-iron)] px-1" title={micEnabled ? "Mute mic" : "Unmute mic"}>
+                        <button onClick={toggleMic} className="bg-black text-[var(--color-silica)] hover:text-white border border-[var(--color-iron)] px-1">
                             {micEnabled ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3 text-red-500" />}
                         </button>
                     )}
-                    {!isOwner && useVideoElement && (
-                        <button onClick={toggleAudio} className="bg-black text-[var(--color-silica)] hover:text-white border border-[var(--color-iron)] px-1" title={audioMuted ? "Unmute" : "Mute"}>
+                    {!isOwner && isClientCam && hasMeeting && (
+                        <button onClick={toggleAudio} className="bg-black text-[var(--color-silica)] hover:text-white border border-[var(--color-iron)] px-1">
                             {audioMuted ? <VolumeX className="w-3 h-3 text-red-500" /> : <Volume2 className="w-3 h-3" />}
                         </button>
                     )}
@@ -377,30 +422,31 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                     </div>
                 )}
 
-                {useVideoElement ? (
-                    <video
-                        ref={videoRef}
-                        className="absolute inset-0 h-full w-full object-cover z-10"
-                        style={{ transform: "translateZ(0)" }}
-                        autoPlay playsInline
-                        muted={isOwner || audioMuted}
-                    />
+                {rtkClient ? (
+                    <RealtimeKitProvider value={rtkClient}>
+                        {isOwner ? (
+                            <LocalStream 
+                                streamId={stream.id}
+                                setVideoLoaded={setVideoLoaded} 
+                                setIsStreaming={setIsStreaming} 
+                                setNetState={setNetState}
+                            />
+                        ) : (
+                            <RemoteStream
+                                audioMuted={audioMuted}
+                                setVideoLoaded={setVideoLoaded} 
+                                setIsStreaming={setIsStreaming} 
+                                setNetState={setNetState}
+                            />
+                        )}
+                    </RealtimeKitProvider>
                 ) : (
                     fallbackFrame && (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={fallbackFrame} alt="Stream" className="absolute inset-0 h-full w-full object-cover z-10" onLoad={() => setVideoLoaded(true)} />
                     )
                 )}
 
                 <canvas ref={overlayRef} className="absolute inset-0 w-full h-full z-20 pointer-events-none" />
-
-                {showPlayButton && (
-                    <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 cursor-pointer" onClick={(e) => { e.stopPropagation(); setShowPlayButton(false); videoRef.current?.play().catch(() => undefined); }}>
-                        <div className="w-16 h-16 rounded-full bg-white/20 border-2 border-white flex items-center justify-center backdrop-blur-sm">
-                            <Play className="w-8 h-8 text-white ml-1" fill="white" />
-                        </div>
-                    </div>
-                )}
             </div>
         </motion.div>
     );

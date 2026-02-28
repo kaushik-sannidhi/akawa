@@ -101,6 +101,22 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         {pathname.includes('/live') && <span className="animate-pulse">_</span>}
                     </Link>
                     <Link
+                        href="/dashboard/reports"
+                        onClick={() => setSidebarOpen(false)}
+                        className={`px-6 py-4 flex items-center justify-between border-y border-transparent transition-none ${pathname.includes('/reports') ? 'bg-[var(--color-data)] text-black border-[var(--color-data)]' : 'text-[var(--color-silica)] hover:text-white hover:bg-[var(--color-dim)] hover:border-[var(--color-iron)]'}`}
+                    >
+                        [ REPORTS ]
+                        {pathname.includes('/reports') && <span className="animate-pulse">_</span>}
+                    </Link>
+                    <Link
+                        href="/dashboard/profile"
+                        onClick={() => setSidebarOpen(false)}
+                        className={`px-6 py-4 flex items-center justify-between border-y border-transparent transition-none ${pathname.includes('/profile') ? 'bg-[var(--color-data)] text-black border-[var(--color-data)]' : 'text-[var(--color-silica)] hover:text-white hover:bg-[var(--color-dim)] hover:border-[var(--color-iron)]'}`}
+                    >
+                        [ PROFILE ]
+                        {pathname.includes('/profile') && <span className="animate-pulse">_</span>}
+                    </Link>
+                    <Link
                         href="/dashboard/settings"
                         onClick={() => setSidebarOpen(false)}
                         className={`px-6 py-4 flex items-center justify-between border-y border-transparent transition-none ${pathname.includes('/settings') ? 'bg-[var(--color-data)] text-black border-[var(--color-data)]' : 'text-[var(--color-silica)] hover:text-white hover:bg-[var(--color-dim)] hover:border-[var(--color-iron)]'}`}
@@ -137,7 +153,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                             <span className="block w-5 h-0.5 bg-[var(--color-data)]" />
                         </button>
                         <h2 className="font-mono font-bold text-xs sm:text-sm text-[var(--color-data)]">
-                            {pathname === '/dashboard' ? 'DASHBOARD OVERVIEW' : pathname.includes('live') ? 'LIVE CAMERAS' : pathname.includes('upload') ? 'UPLOAD VIDEO' : 'SETTINGS'}
+                            {pathname === '/dashboard'
+                                ? 'DASHBOARD OVERVIEW'
+                                : pathname.includes('live')
+                                    ? 'LIVE CAMERAS'
+                                    : pathname.includes('upload')
+                                        ? 'UPLOAD VIDEO'
+                                        : pathname.includes('reports')
+                                            ? 'INCIDENT REPORTS'
+                                            : pathname.includes('profile')
+                                                ? 'USER PROFILE'
+                                                : 'SETTINGS'}
                         </h2>
                     </div>
                     <div className="relative flex items-center gap-2 sm:gap-4 bg-[var(--color-iron)] pl-2 pr-1 py-1">
@@ -179,6 +205,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                                         className={`px-3 py-3 border-b border-[var(--color-iron)] ${pathname.includes('/live') ? 'bg-[var(--color-alert)] text-black' : 'text-[var(--color-alert)]'}`}
                                     >
                                         [ LIVE CAMERAS ]
+                                    </Link>
+                                    <Link
+                                        href="/dashboard/reports"
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`px-3 py-3 border-b border-[var(--color-iron)] ${pathname.includes('/reports') ? 'bg-[var(--color-data)] text-black' : 'text-[var(--color-data)]'}`}
+                                    >
+                                        [ REPORTS ]
+                                    </Link>
+                                    <Link
+                                        href="/dashboard/profile"
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`px-3 py-3 border-b border-[var(--color-iron)] ${pathname.includes('/profile') ? 'bg-[var(--color-data)] text-black' : 'text-[var(--color-data)]'}`}
+                                    >
+                                        [ PROFILE ]
                                     </Link>
                                     <Link
                                         href="/dashboard/settings"
