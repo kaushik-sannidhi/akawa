@@ -180,14 +180,18 @@ async def proxy_audio_analyze(req: AudioRequest):
     except Exception as e:
         return {"error": str(e)}
 
-def proxy_fast_vision_frame(frame: np.ndarray) -> List[Dict[str, Any]]:
+def proxy_fast_vision_frame(frame: np.ndarray, video_name: str = "live_stream", source_type: str = "live") -> List[Dict[str, Any]]:
     """Encodes a single OpenCV frame and sends it to the Modal FastVisionAPI."""
     try:
         ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         if not ret: return []
         b64_str = base64.b64encode(buffer).decode('utf-8')
         
-        resp = requests.post(FAST_VISION_URL, json={"frame_b64": b64_str}, timeout=5)
+        resp = requests.post(FAST_VISION_URL, json={
+            "frame_b64": b64_str, 
+            "video_name": video_name,
+            "source_type": source_type
+        }, timeout=5)
         if resp.status_code == 200:
             data = resp.json()
             return [
@@ -203,7 +207,7 @@ def proxy_fast_vision_frame(frame: np.ndarray) -> List[Dict[str, Any]]:
         logger.error(f"Error proxying frame to Modal FastVisionAPI: {e}")
         return []
 
-def proxy_fast_vision_batch(frames: List[np.ndarray]) -> List[List[Dict[str, Any]]]:
+def proxy_fast_vision_batch(frames: List[np.ndarray], video_name: str = "video_batch") -> List[List[Dict[str, Any]]]:
     """Sends a sequence of frames for TwoStream evaluation. Optionally processes 1 YOLO frame."""
     try:
         encoded_frames = []
@@ -215,7 +219,11 @@ def proxy_fast_vision_batch(frames: List[np.ndarray]) -> List[List[Dict[str, Any
         if len(encoded_frames) < 2:
             return [[] for _ in frames]
             
-        resp = requests.post(FAST_VISION_URL, json={"frame_sequence_b64": encoded_frames}, timeout=10)
+        resp = requests.post(FAST_VISION_URL, json={
+            "frame_sequence_b64": encoded_frames, 
+            "video_name": video_name,
+            "source_type": "upload"
+        }, timeout=10)
         
         # We process batches mainly for TwoStream. For YOLO we just grab a generic result 
         # for the middle frame for demonstration, or return empty tracking boxes since 
@@ -331,12 +339,17 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
 
                 # When batch is full, send to Modal FastVisionAPI
                 if len(batch_frames) >= BATCH_SIZE:
-                    batch_detections = proxy_fast_vision_batch(batch_frames)
-                    
-                    # Fall detection on the middle/relevant frame of the batch for SSE
-                    # or simply run on all sampled frames separately. 
-                    # To keep it simple and consistent:
+                    batch_detections = proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+
                     for i, (ts, frame) in enumerate(zip(batch_timestamps, batch_frames)):
+                        sample_count += 1
+                        telemetry_service.log_frames(sample_interval, uid)
+                        
+                        dets = batch_detections[i]
+                        # Run local fall detection
+                        fall_dets = fall_detector.detect(frame)
+                        dets.extend(fall_dets)
+
                         sample_count += 1
                         telemetry_service.log_frames(sample_interval, uid)
                         
@@ -360,7 +373,7 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
 
         # Process remaining frames if we have at least 2 for optical flow
         if len(batch_frames) >= 2:
-            batch_detections = proxy_fast_vision_batch(batch_frames)
+            batch_detections = proxy_fast_vision_batch(batch_frames, video_name=matching[0])
             for ts, dets in zip(batch_timestamps, batch_detections):
                 sample_count += 1
                 progress = sample_count / max(total_samples, 1)
@@ -517,11 +530,11 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
                     if frame is not None:
-                        detections = proxy_fast_vision_frame(frame)
+                        detections = proxy_fast_vision_frame(frame, video_name=f"ws_{video_id}", source_type="upload")
                         # Run local fall detection
                         fall_dets = fall_detector.detect(frame)
                         detections.extend(fall_dets)
-                        
+
                         telemetry_service.log_frames(1, uid)
                         if any(d.get("is_weapon") for d in detections):
                             telemetry_service.log_anomaly("NODE_WS_STREAM", uid)

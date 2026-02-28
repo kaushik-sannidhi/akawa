@@ -256,7 +256,7 @@ class StreamManager:
                 t0 = time.time()
                 # 1. Weapon Detection (Modal)
                 detections = await asyncio.to_thread(
-                    proxy_fast_vision_frame, frame)
+                    proxy_fast_vision_frame, frame, source_type="live")
                 
                 # 2. Fall Detection (Local Radar + Judge)
                 fall_detections = await asyncio.to_thread(
@@ -264,7 +264,7 @@ class StreamManager:
                 
                 # Merge detections
                 detections.extend(fall_detections)
-                
+
                 latency_ms = int((time.time() - t0) * 1000)
 
                 stream.latest_detections = detections

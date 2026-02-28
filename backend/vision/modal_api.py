@@ -65,6 +65,7 @@ def download_model():
 # ── Pydantic schemas for the Qwen2-VL endpoint ──────────────────────────────
 class Qwen2VLRequest(BaseModel):
     video_b64: str  # Base64 encoded video string (without data:video/mp4;base64, prefix)
+    video_name: Optional[str] = "unknown_video"
     prompt: Optional[str] = "You are a specialized security analyst. Your goal is to provide a detailed, objective description of every person in the video and their exact physical actions. For each person, describe their clothing, appearance, and what they are doing to others or the environment. Focus on physical interactions: grappling, punching, grabbing, struggling, dragging, or protective stances. Describe exactly who is doing what to whom in high detail."
 
 class Qwen2VLResponse(BaseModel):
@@ -112,6 +113,13 @@ class Qwen2VLModel:
         import tempfile
         import os
         from qwen_vl_utils import process_vision_info
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("qwen2_vl")
+        
+        video_name = req.video_name or "unknown_video"
+        logger.info(f"[VLM] Starting analysis for video: {video_name}")
 
         temp_video_path = None
         try:
@@ -166,9 +174,11 @@ class Qwen2VLModel:
                 generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )[0]
 
+            logger.info(f"[VLM] Analysis complete for {video_name}. Detection snippet: {output_text.strip()[:100]}...")
             return Qwen2VLResponse(text=output_text.strip())
 
         except Exception as e:
+            logger.error(f"[VLM] Error analyzing {video_name}: {str(e)}")
             traceback.print_exc()
             return Qwen2VLResponse(text="", error=str(e))
             
@@ -197,7 +207,7 @@ fast_vision_image = (
         "torch>=2.0.0" # ultralytics needs torch
     )
     .add_local_dir(
-        "backend/vision/models",
+        "models",
         remote_path="/root/models"
     )
 )
@@ -206,6 +216,9 @@ class FastVisionRequest(BaseModel):
     video_b64: Optional[str] = None
     frame_b64: Optional[str] = None # For single frame websocket
     frame_sequence_b64: Optional[List[str]] = None # For TwoStream sequences
+    video_name: Optional[str] = "live_stream"
+    source_type: Optional[str] = "live" # "live" or "upload"
+
 
 class Detection(BaseModel):
     bbox: List[float] # [x1, y1, x2, y2]
@@ -266,6 +279,15 @@ class FastVisionAPI:
         import tempfile
         import os
         import traceback
+        import logging
+
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger("fast_vision")
+        
+        video_name = req.video_name or "live_stream"
+        source_type = req.source_type or "live"
+        logger.info(f"[FastVision] Analyzing {video_name} (Source: {source_type})")
+
 
         # --- Single Frame Processing (WebSockets) ---
         if req.frame_b64:
@@ -325,6 +347,9 @@ class FastVisionAPI:
                 
                 max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
                 weapons_detected = max_weapon_conf > 0.5
+                
+                if weapons_detected:
+                    logger.info(f"[FastVision] Frame Detection: WEAPON DETECTED in {video_name} (conf: {max_weapon_conf:.2f})")
                 
                 return FastVisionResponse(
                     weapons_detected=weapons_detected,
@@ -391,10 +416,13 @@ class FastVisionAPI:
                  sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
                  prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
                  
+                 if prob > 0.6:
+                     logger.info(f"[FastVision] Sequence Detection: VIOLENCE DETECTED in {video_name} (conf: {prob:.2f})")
+
                  return FastVisionResponse(
-                     weapons_detected=False, weapon_confidence=0.0,
-                     violence_detected=prob > 0.6, violence_confidence=prob,
-                     sequence_violence_confidence=prob
+                      weapons_detected=False, weapon_confidence=0.0,
+                      violence_detected=prob > 0.6, violence_confidence=prob,
+                      sequence_violence_confidence=prob
                  )
              except Exception as e:
                  traceback.print_exc()
@@ -485,6 +513,11 @@ class FastVisionAPI:
                 
                 max_brawl_conf = max(brawl_confidences) if brawl_confidences else 0.0
                 violence_detected = max_brawl_conf > 0.6 # Threshold from test script
+
+                if weapons_detected or violence_detected:
+                    logger.info(f"[FastVision] Video Analysis: ALERT for {video_name} - Weapon: {weapons_detected} ({max_weapon_conf:.2f}), Violence: {violence_detected} ({max_brawl_conf:.2f})")
+                else:
+                    logger.info(f"[FastVision] Video Analysis: No threats detected in {video_name}")
 
                 return FastVisionResponse(
                     weapons_detected=weapons_detected,
