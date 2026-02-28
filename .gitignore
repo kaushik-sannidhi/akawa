@@ -3,3 +3,5 @@
 .venv
 design-system
 runs
+__pycache__/
+*.pyc
