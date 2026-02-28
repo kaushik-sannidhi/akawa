@@ -237,8 +237,9 @@ class StreamManager:
                     weapon_det = next(d for d in detections if d.get("is_weapon"))
                     notification_manager.send_alert(
                         uid=stream.uid,
-                        title=f"Weapon Detected on Live Stream: {stream.name}",
-                        message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence."
+                        title=f"Threat Detected on Live Stream: {stream.name}",
+                        message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
+                        class_name=weapon_det.get("class_name", "weapon"),
                     )
                     self._persist_live_alert_event(stream, frame, detections)
 

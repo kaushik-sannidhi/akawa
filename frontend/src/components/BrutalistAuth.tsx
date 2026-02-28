@@ -10,8 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 export function BrutalistAuth({ initialView = "login" }: { initialView?: "login" | "signup" }) {
     const [view, setView] = useState<"login" | "signup" | "onboarding">(initialView as any);
-    const [telegramId, setTelegramId] = useState("");
-    const [email, setEmail] = useState("admin@akawa.os");
+    const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
@@ -32,10 +31,16 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                 const user = auth.currentUser;
                 if (user) {
                     try {
+                        const defaultAlertType = { email: true, contacts: [] };
                         await set(ref(db, `alerts_config/${user.uid}`), {
                             email: email,
-                            telegram_id: telegramId || null,
-                            enabled: true,
+                            email_enabled: true,
+                            alert_types: {
+                                gun: { ...defaultAlertType },
+                                knife: { ...defaultAlertType },
+                                fall: { ...defaultAlertType },
+                                fight: { ...defaultAlertType },
+                            },
                             updated_at: new Date().toISOString()
                         });
                     } catch (configErr) {
@@ -110,7 +115,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
 
                 <div className="relative z-10 mb-24">
                     <h1 className="text-6xl lg:text-8xl font-black text-white leading-[0.85] uppercase break-words mix-blend-difference mb-8">
-                        {view === "login" ? "SYSTEM\nLOGIN" : view === "signup" ? "INITIALIZE\nWORKSPACE" : "MOBILE\nALERTS"}
+                        {view === "login" ? "SYSTEM\nLOGIN" : view === "signup" ? "INITIALIZE\nWORKSPACE" : "EMAIL\nALERTS"}
                     </h1>
                     <div className="border-l-[4px] border-[var(--color-alert)] pl-4">
                         <p className="font-mono text-[var(--color-silica)] text-sm max-w-sm uppercase font-bold">
@@ -118,7 +123,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                 ? "WARNING: UNAUTHORIZED ACCESS IS LOGGED AND TRACED."
                                 : view === "signup"
                                     ? "DEPLOY A NEW A.I. INSTANCE TO YOUR HARDWARE ENVIRONMENT."
-                                    : "OPTIONAL: LINK TELEGRAM DMs. EMAILS ARE AUTOMATIC."}
+                                    : "OPTIONAL: LINK TELEGRAM FOR INSTANT ALERTS. EMAILS ARE AUTOMATIC."}
                         </p>
                     </div>
                 </div>
@@ -205,26 +210,23 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                     </>
                                 ) : (
                                     <>
-                                        <div className="space-y-2">
-                                            <label className="block font-mono text-xs text-[var(--color-silica)] uppercase font-bold">Telegram Chat ID (Optional)</label>
-                                            <input
-                                                type="text"
-                                                value={telegramId}
-                                                onChange={(e) => setTelegramId(e.target.value)}
-                                                className="w-full bg-[var(--color-dim)] border-[2px] border-[var(--color-iron)] p-3 text-white font-mono text-sm focus:border-[var(--color-data)] focus:outline-none transition-colors rounded-none placeholder:text-[var(--color-iron)]"
-                                                placeholder="e.g. 123456789"
-                                            />
+
+                                        <div className="bg-[var(--color-dim)] border border-[var(--color-iron)] p-3 mt-2">
+                                            <p className="text-[10px] text-[var(--color-data)] font-bold mb-1">📧 EMAIL ALERTS: ENABLED BY DEFAULT</p>
+                                            <p className="text-[10px] text-[var(--color-silica)] normal-case">
+                                                Security alerts will be sent to <span className="text-[var(--color-data)]">{email}</span> automatically. You can manage all alert settings from the dashboard.
+                                            </p>
                                         </div>
                                     </>
                                 )}
 
-                                <div className="pt-4">
+                                <div className="pt-4 space-y-3">
                                     <button
                                         type="submit"
                                         disabled={loading}
                                         className="w-full bg-[var(--color-alert)] text-black font-bold uppercase tracking-widest py-4 border-[2px] border-[var(--color-alert)] hover:bg-black hover:text-[var(--color-alert)] transition-none text-sm disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
                                     >
-                                        <span className="relative z-10">{loading ? "[ PROCESSING... ]" : (view === "login" ? "[ INITIATE_LOGIN ]" : view === "signup" ? "[ ALLOCATE_WORKSPACE ]" : "[ SAVE_AND_CONTINUE ]")}</span>
+                                        <span className="relative z-10">{loading ? "[ PROCESSING... ]" : (view === "login" ? "[ INITIATE_LOGIN ]" : view === "signup" ? "[ ALLOCATE_WORKSPACE ]" : "[ ENTER DASHBOARD →  ]")}</span>
                                         {/* Hover glitch effect */}
                                         <div className="absolute inset-0 bg-white translate-x-[-100%] group-hover:translate-x-full transition-transform duration-500 opacity-20 pointer-events-none" />
                                     </button>
@@ -234,15 +236,17 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                     </AnimatePresence>
 
                     {/* Toggle Button Positioned Outside the Animated Box */}
-                    <div className="absolute -bottom-8 left-0 right-0 text-center z-20">
-                        <button
-                            type="button"
-                            onClick={toggleView}
-                            className="font-mono text-xs text-[var(--color-silica)] hover:text-white underline decoration-[var(--color-iron)] underline-offset-4 hover:decoration-white transition-colors bg-black px-4 py-2 border border-[var(--color-iron)] uppercase cursor-crosshair"
-                        >
-                            {view === "login" ? "REQUIRE_NEW_INSTANCE?" : view === "signup" ? "RETURN_TO_LOGIN" : "SKIP_ONBOARDING"}
-                        </button>
-                    </div>
+                    {view !== "onboarding" && (
+                        <div className="absolute -bottom-8 left-0 right-0 text-center z-20">
+                            <button
+                                type="button"
+                                onClick={toggleView}
+                                className="font-mono text-xs text-[var(--color-silica)] hover:text-white underline decoration-[var(--color-iron)] underline-offset-4 hover:decoration-white transition-colors bg-black px-4 py-2 border border-[var(--color-iron)] uppercase cursor-crosshair"
+                            >
+                                {view === "login" ? "REQUIRE_NEW_INSTANCE?" : "RETURN_TO_LOGIN"}
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

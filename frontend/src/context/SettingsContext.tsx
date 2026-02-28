@@ -1,12 +1,51 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { auth, db } from "@/lib/firebase";
+import { ref, get, set } from "firebase/database";
+import { onAuthStateChanged } from "firebase/auth";
+
+// Alert type configuration
+export type AlertTypeConfig = {
+    email: boolean;
+    contacts: string[];
+};
+
+export type AlertTypesMap = {
+    gun: AlertTypeConfig;
+    knife: AlertTypeConfig;
+    fall: AlertTypeConfig;
+    fight: AlertTypeConfig;
+};
+
+export type NotificationSettings = {
+    email: string;
+    email_enabled: boolean;
+    alert_types: AlertTypesMap;
+};
+
+const DEFAULT_ALERT_TYPE: AlertTypeConfig = { email: true, contacts: [] };
+
+export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+    email: "",
+    email_enabled: true,
+    alert_types: {
+        gun: { email: true, contacts: [] },
+        knife: { email: true, contacts: [] },
+        fall: { email: true, contacts: [] },
+        fight: { email: true, contacts: [] },
+    },
+};
 
 type SettingsContextType = {
     confidenceThreshold: number;
     setConfidenceThreshold: (v: number) => void;
     selectedModel: string;
     setSelectedModel: (v: string) => void;
+    notificationSettings: NotificationSettings;
+    setNotificationSettings: (v: NotificationSettings) => void;
+    saveNotificationSettings: (settings?: NotificationSettings) => Promise<void>;
+    notificationsLoaded: boolean;
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
@@ -38,12 +77,63 @@ function saveSettings(settings: { confidenceThreshold: number; selectedModel: st
 export const SettingsProvider = ({ children }: { children: ReactNode }) => {
     const [confidenceThreshold, setConfidenceThresholdRaw] = useState(0.65);
     const [selectedModel, setSelectedModelRaw] = useState("latest");
+    const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
+    const [notificationsLoaded, setNotificationsLoaded] = useState(false);
 
     useEffect(() => {
         const saved = loadSettings();
         setConfidenceThresholdRaw(saved.confidenceThreshold);
         setSelectedModelRaw(saved.selectedModel);
     }, []);
+
+    // Load notification settings from Firebase when user is authenticated
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                try {
+                    const configRef = ref(db, `alerts_config/${user.uid}`);
+                    const snapshot = await get(configRef);
+                    if (snapshot.exists()) {
+                        const data = snapshot.val();
+                        setNotificationSettings({
+                            email: data.email || user.email || "",
+                            email_enabled: data.email_enabled ?? true,
+                            alert_types: {
+                                gun: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.gun },
+                                knife: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.knife },
+                                fall: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.fall },
+                                fight: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.fight },
+                            },
+                        });
+                    } else {
+                        setNotificationSettings({
+                            ...DEFAULT_NOTIFICATION_SETTINGS,
+                            email: user.email || "",
+                        });
+                    }
+                } catch (err) {
+                    console.error("Failed to load notification settings:", err);
+                }
+                setNotificationsLoaded(true);
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const saveNotificationSettings = async (settings?: NotificationSettings) => {
+        const toSave = settings || notificationSettings;
+        const uid = auth.currentUser?.uid;
+        if (!uid) return;
+        try {
+            const configRef = ref(db, `alerts_config/${uid}`);
+            await set(configRef, {
+                ...toSave,
+                updated_at: new Date().toISOString(),
+            });
+        } catch (err) {
+            console.error("Failed to save notification settings:", err);
+        }
+    };
 
     const setConfidenceThreshold = (v: number) => {
         setConfidenceThresholdRaw(v);
@@ -56,7 +146,12 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
     };
 
     return (
-        <SettingsContext.Provider value={{ confidenceThreshold, setConfidenceThreshold, selectedModel, setSelectedModel }}>
+        <SettingsContext.Provider value={{
+            confidenceThreshold, setConfidenceThreshold,
+            selectedModel, setSelectedModel,
+            notificationSettings, setNotificationSettings,
+            saveNotificationSettings, notificationsLoaded,
+        }}>
             {children}
         </SettingsContext.Provider>
     );
