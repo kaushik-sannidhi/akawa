@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 
+export const runtime = 'edge';
+
 const apiKey = "AIzaSyBIzjSjDQMH3Lxi7i6hEmBnJfVWxIgEOZ4";
 const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent";
 
