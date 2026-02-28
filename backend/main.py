@@ -458,14 +458,14 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
 
 
 
-# ==================== Stream Input (AI frames from camera provider) ====================
+# ==================== Stream Input (frames from camera provider) ====================
 
 
 @app.websocket("/ws/stream_in/{stream_id}")
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
-    Receives low-res binary JPEG frames from the camera provider for AI only.
-    Video delivery to viewers is handled by PeerJS WebRTC (P2P).
+    Receives binary JPEG frames from the camera provider.
+    Decodes for AI inference AND relays raw bytes to all viewers.
     """
     import asyncio as _aio
 
@@ -475,7 +475,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    logger.info(f"[WS IN] AI frame provider connected on stream {stream_id}")
+    logger.info(f"[WS IN] Camera provider connected on stream {stream_id}")
     stream.status = "active"
     stream_manager.ensure_ai_task(stream)
 
@@ -490,12 +490,16 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
 
             if "bytes" in message and message["bytes"]:
                 jpeg_bytes = message["bytes"]
+                # Decode for AI in thread pool
                 frame = await _aio.to_thread(_decode_jpeg, jpeg_bytes)
                 if frame is not None:
                     stream.latest_frame_cv2 = frame
+                # Relay raw bytes to all viewers
+                from app.stream_manager import stream_manager as sm
+                sm._broadcast_bytes(stream, jpeg_bytes)
 
     except WebSocketDisconnect:
-        logger.info(f"[WS IN] AI frame provider disconnected from stream {stream_id}")
+        logger.info(f"[WS IN] Camera provider disconnected from stream {stream_id}")
     except Exception as e:
         logger.error(f"[WS IN] Error on stream {stream_id}: {e}")
     finally:
