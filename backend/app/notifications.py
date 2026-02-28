@@ -18,6 +18,7 @@ class NotificationManager:
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.smtp_email = os.getenv("SMTP_EMAIL", "")
         self.smtp_password = os.getenv("SMTP_PASSWORD", "")
+        self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         self.last_alert_time: Dict[str, float] = {}
 
     def get_user_settings(self, uid: str) -> Dict[str, Any]:
@@ -56,10 +57,10 @@ class NotificationManager:
         if email_addr and self.smtp_email and self.smtp_password:
             self.send_email(email_addr, title, message, image_bytes)
             
-        # 2. Discord Webhook
-        discord_webhook = settings.get("discord_webhook")
-        if discord_webhook:
-            self.send_discord_webhook(discord_webhook, title, message)
+        # 2. Telegram DM
+        telegram_id = settings.get("telegram_id")
+        if telegram_id and self.telegram_bot_token:
+            self.send_telegram_dm(telegram_id, self.telegram_bot_token, f"{title}\n{message}")
             
         # 3. WhatsApp (via CallMeBot)
         whatsapp_number = settings.get("whatsapp_number")
@@ -95,21 +96,14 @@ class NotificationManager:
         except Exception as e:
             logger.error(f"Failed to send email alert: {e}")
 
-    def send_discord_webhook(self, webhook_url: str, title: str, description: str):
+    def send_telegram_dm(self, chat_id: str, token: str, text: str):
         try:
-            payload = {
-                "embeds": [
-                    {
-                        "title": title,
-                        "description": description,
-                        "color": 16711680 # Red color for alerts
-                    }
-                ]
-            }
-            requests.post(webhook_url, json=payload)
-            logger.info(f"Discord webhook alert sent.")
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = {"chat_id": chat_id, "text": text}
+            requests.post(url, json=payload)
+            logger.info(f"Telegram DM alert sent.")
         except Exception as e:
-            logger.error(f"Failed to send Discord webhook alert: {e}")
+            logger.error(f"Failed to send Telegram DM alert: {e}")
 
     def send_callmebot_whatsapp(self, phone: str, apikey: str, text: str):
         try:

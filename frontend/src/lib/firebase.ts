@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
+import { getDatabase } from "firebase/database";
 
 const firebaseConfig = {
     apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyA10gg4dmWR19i-5YmbTnkDFxvNt5ghdfY",
@@ -12,8 +13,8 @@ const firebaseConfig = {
     measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID || "G-713MQXD177"
 };
 
-
 // Initialize Firebase only if it hasn't been initialized yet
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
+export const db = getDatabase(app);
 export default app;
