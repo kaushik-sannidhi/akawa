@@ -12,11 +12,13 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.telemetry import telemetry_service
 from app.stream_manager import stream_manager
+from vision.fall_detection import FallDetector
 import requests
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Weapon Detection API")
+fall_detector = FallDetector()
 
 # Setup CORS — allow local dev, itsakawa.tech, Vercel, ingeniumstem, Cloudflare Pages
 default_origins = [
@@ -330,10 +332,19 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                 # When batch is full, send to Modal FastVisionAPI
                 if len(batch_frames) >= BATCH_SIZE:
                     batch_detections = proxy_fast_vision_batch(batch_frames)
-
-                    for ts, dets in zip(batch_timestamps, batch_detections):
+                    
+                    # Fall detection on the middle/relevant frame of the batch for SSE
+                    # or simply run on all sampled frames separately. 
+                    # To keep it simple and consistent:
+                    for i, (ts, frame) in enumerate(zip(batch_timestamps, batch_frames)):
                         sample_count += 1
                         telemetry_service.log_frames(sample_interval, uid)
+                        
+                        dets = batch_detections[i]
+                        # Run local fall detection
+                        fall_dets = fall_detector.detect(frame)
+                        dets.extend(fall_dets)
+
                         if any(d.get("is_weapon") for d in dets):
                             telemetry_service.log_anomaly("NODE_PREANALYSIS", uid)
 
@@ -507,17 +518,33 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
 
                     if frame is not None:
                         detections = proxy_fast_vision_frame(frame)
+                        # Run local fall detection
+                        fall_dets = fall_detector.detect(frame)
+                        detections.extend(fall_dets)
+                        
                         telemetry_service.log_frames(1, uid)
                         if any(d.get("is_weapon") for d in detections):
                             telemetry_service.log_anomaly("NODE_WS_STREAM", uid)
                             from app.notifications import notification_manager
-                            weapon_det = next(d for d in detections if d.get("is_weapon"))
-                            notification_manager.send_alert(
-                                uid=uid,
-                                title="🚨 Threat Detected in Live Detection Stream!",
-                                message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
-                                class_name=weapon_det.get("class_name", "weapon"),
-                            )
+                            
+                            weapon_det = next((d for d in detections if d.get("is_weapon") and d.get("class_name") != "fall"), None)
+                            fall_det = next((d for d in detections if d.get("class_name") == "fall"), None)
+                            
+                            if weapon_det:
+                                notification_manager.send_alert(
+                                    uid=uid,
+                                    title="🚨 Threat Detected in Live Detection Stream!",
+                                    message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
+                                    class_name=weapon_det.get("class_name", "weapon"),
+                                )
+                            
+                            if fall_det:
+                                notification_manager.send_alert(
+                                    uid=uid,
+                                    title="🚨 Fall Detected in Live Detection Stream!",
+                                    message=f"A possible fall was detected with {int(fall_det.get('confidence', 0) * 100)}% confidence.",
+                                    class_name="fall",
+                                )
 
                         msg = {
                             "timestamp": timestamp,

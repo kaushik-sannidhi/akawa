@@ -10,6 +10,7 @@ import os
 import requests
 from typing import Dict, List, Any, Set, Optional
 from fastapi import WebSocket
+from vision.fall_detection import FallDetector
 
 logger = logging.getLogger(__name__)
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
@@ -74,6 +75,7 @@ class Stream:
 class StreamManager:
     def __init__(self):
         self.streams: Dict[str, Stream] = {}
+        self.fall_detector = FallDetector()
 
     # ------------------------------------------------------------------ CRUD
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
@@ -252,8 +254,17 @@ class StreamManager:
                 last_frame_id = frame_id
 
                 t0 = time.time()
+                # 1. Weapon Detection (Modal)
                 detections = await asyncio.to_thread(
                     proxy_fast_vision_frame, frame)
+                
+                # 2. Fall Detection (Local Radar + Judge)
+                fall_detections = await asyncio.to_thread(
+                    self.fall_detector.detect, frame)
+                
+                # Merge detections
+                detections.extend(fall_detections)
+                
                 latency_ms = int((time.time() - t0) * 1000)
 
                 stream.latest_detections = detections
@@ -266,13 +277,27 @@ class StreamManager:
                     telemetry_service.log_anomaly(
                         f"NODE_WS_{stream.id[:6]}", stream.uid)
                     from app.notifications import notification_manager
-                    weapon_det = next(d for d in detections if d.get("is_weapon"))
-                    notification_manager.send_alert(
-                        uid=stream.uid,
-                        title=f"Threat Detected on Live Stream: {stream.name}",
-                        message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
-                        class_name=weapon_det.get("class_name", "weapon"),
-                    )
+                    
+                    # Group detections for notification
+                    weapon_det = next((d for d in detections if d.get("is_weapon") and d.get("class_name") != "fall"), None)
+                    fall_det = next((d for d in detections if d.get("class_name") == "fall"), None)
+                    
+                    if weapon_det:
+                        notification_manager.send_alert(
+                            uid=stream.uid,
+                            title=f"Threat Detected on Live Stream: {stream.name}",
+                            message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
+                            class_name=weapon_det.get("class_name", "weapon"),
+                        )
+                    
+                    if fall_det:
+                        notification_manager.send_alert(
+                            uid=stream.uid,
+                            title=f"Fall Detected on Live Stream: {stream.name}",
+                            message=f"A possible fall was detected with {int(fall_det.get('confidence', 0) * 100)}% confidence.",
+                            class_name="fall",
+                        )
+                    
                     self._persist_live_alert_event(stream, frame, detections)
 
                 # Track alert window for clip saving
