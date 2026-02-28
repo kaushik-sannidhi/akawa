@@ -9,6 +9,7 @@ from app.detector import WeaponDetector, WEAPON_CLASSES
 import json
 import base64
 import numpy as np
+import torch
 from pydantic import BaseModel
 from typing import List
 from app.telemetry import telemetry_service
@@ -102,7 +103,14 @@ def get_detector(model_id: str = "latest"):
     global current_model_id, global_detector
 
     if current_model_id != model_id or global_detector is None:
-        print(f"Initializing Modal weapon detector client (model_id={model_id})")
+        if global_detector is not None:
+            if hasattr(global_detector, "model") and global_detector.model is not None:
+                del global_detector.model
+            global_detector = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        print(f"Loading YOLO weapon detector (model_id={model_id})")
         global_detector = WeaponDetector(model_path=model_id)
         current_model_id = model_id
 
@@ -120,8 +128,8 @@ def health_check():
     """Simple health endpoint for tunnel / load-balancer probes."""
     return {
         "status": "ok",
-        "api_mode": "modal_cloud",
-        "model_client_ready": global_detector is not None,
+        "gpu": torch.cuda.is_available(),
+        "model_loaded": global_detector is not None,
     }
 
 
