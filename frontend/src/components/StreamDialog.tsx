@@ -176,6 +176,8 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                         )}
                     </div>
 
+
+
                     <button
                         type="submit"
                         disabled={loading}

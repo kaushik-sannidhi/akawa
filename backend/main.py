@@ -9,6 +9,7 @@ from app.detector import WeaponDetector, WEAPON_CLASSES
 import json
 import base64
 import numpy as np
+import torch
 from pydantic import BaseModel
 from typing import List
 from app.telemetry import telemetry_service
@@ -46,6 +47,8 @@ app.add_middleware(
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+LIVE_EVENTS_DIR = "live_events"
+os.makedirs(LIVE_EVENTS_DIR, exist_ok=True)
 
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
 
@@ -102,7 +105,14 @@ def get_detector(model_id: str = "latest"):
     global current_model_id, global_detector
 
     if current_model_id != model_id or global_detector is None:
-        print(f"Initializing Modal weapon detector client (model_id={model_id})")
+        if global_detector is not None:
+            if hasattr(global_detector, "model") and global_detector.model is not None:
+                del global_detector.model
+            global_detector = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        print(f"Loading YOLO weapon detector (model_id={model_id})")
         global_detector = WeaponDetector(model_path=model_id)
         current_model_id = model_id
 
@@ -120,8 +130,8 @@ def health_check():
     """Simple health endpoint for tunnel / load-balancer probes."""
     return {
         "status": "ok",
-        "api_mode": "modal_cloud",
-        "model_client_ready": global_detector is not None,
+        "gpu": torch.cuda.is_available(),
+        "model_loaded": global_detector is not None,
     }
 
 
@@ -242,6 +252,7 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
 
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+app.mount("/live-events", StaticFiles(directory=LIVE_EVENTS_DIR), name="live_events")
 
 
 # ==================== Firebase Alert Persistence ====================
@@ -310,6 +321,40 @@ def get_alerts(uid: str, video_id: str):
         return {"video_id": video_id, "alerts": list(data.values()) if isinstance(data, dict) else []}
     except Exception as e:
         return {"video_id": video_id, "alerts": [], "error": str(e)}
+
+
+@app.get("/api/live-events")
+def list_live_events(uid: str, stream_id: str = "", class_name: str = "", limit: int = 100):
+    """
+    Return persisted live-alert events for later VLM retrieval / audit.
+    """
+    if not uid or uid == "anonymous":
+        return {"events": []}
+
+    try:
+        url = f"{FIREBASE_RTDB_BASE}/live_events/{uid}.json"
+        resp = requests.get(url, timeout=6)
+        if resp.status_code != 200:
+            return {"events": []}
+
+        raw = resp.json() or {}
+        if not isinstance(raw, dict):
+            return {"events": []}
+
+        events = list(raw.values())
+        if stream_id:
+            events = [e for e in events if e.get("stream_id") == stream_id]
+        if class_name:
+            needle = class_name.lower()
+            events = [
+                e for e in events
+                if any((c or "").lower() == needle for c in e.get("classes", []))
+            ]
+
+        events.sort(key=lambda e: e.get("timestamp", 0), reverse=True)
+        return {"events": events[: max(1, min(limit, 500))]}
+    except Exception as exc:
+        return {"events": [], "error": str(exc)}
 
 
 # ==================== WebSocket Detection Endpoint (for uploaded video) ====================
@@ -389,7 +434,7 @@ class StreamCreateRequest(BaseModel):
 
 
 @app.get("/api/streams")
-def list_streams(uid: str = "anonymous"):
+async def list_streams(uid: str = "anonymous"):
     """Return all active streams for this user."""
     if uid and uid != "anonymous":
         _restore_streams_from_firebase(uid)
@@ -450,14 +495,14 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
 
 
 
-# ==================== Stream Input (frames from camera provider) ====================
+# ==================== Stream Input (frames from camera provider — AI only) ====================
 
 
 @app.websocket("/ws/stream_in/{stream_id}")
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
     Receives binary JPEG frames from the camera provider.
-    IMMEDIATELY relays raw bytes to viewers, then decodes for AI in background.
+    Decodes for AI inference and stores base64 for viewer broadcast.
     """
     import asyncio as _aio
 
@@ -482,11 +527,10 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
             if "bytes" in message and message["bytes"]:
                 jpeg_bytes = message["bytes"]
 
-                # 1. BROADCAST IMMEDIATELY — zero decode delay for viewers
-                from app.stream_manager import stream_manager as sm
-                sm._broadcast_bytes(stream, jpeg_bytes)
+                # Store base64 for viewer broadcast
+                stream.latest_frame_b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
-                # 2. Decode for AI in background (fire-and-forget)
+                # Decode for AI in background
                 async def _bg_decode(data: bytes):
                     frame = await _aio.to_thread(_decode_jpeg, data)
                     if frame is not None:
@@ -502,14 +546,14 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
             stream.status = "waiting_for_client"
 
 
-# ==================== Stream Output (frames + detections to viewers) ====================
+# ==================== Stream Output (frames + detections via WebSocket) ====================
 
 
 @app.websocket("/ws/stream_out/{stream_id}")
 async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     """
-    Viewers subscribe here.
-    Binary messages = JPEG frames, Text messages = detection JSON.
+    Viewers subscribe here for video frames and AI detection overlay data.
+    Receives combined frame + detection JSON payloads.
     """
     await websocket.accept()
     stream = stream_manager.get_stream(stream_id)
@@ -517,11 +561,11 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    logger.info(f"[WS OUT] Viewer connected to stream {stream_id} (type={stream.type})")
+    logger.info(f"[WS OUT] Viewer connected to stream {stream_id}")
     stream.viewer_wss.add(websocket)
     try:
         while stream._running and stream_manager.get_stream(stream_id):
-            # Use generic receive() to handle text pings, binary, or disconnect
+            # Use generic receive() to handle text pings or disconnect
             await websocket.receive()
     except WebSocketDisconnect:
         pass

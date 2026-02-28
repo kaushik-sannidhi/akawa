@@ -5,10 +5,16 @@ import time
 import json
 import logging
 import numpy as np
+import base64
+import os
+import requests
 from typing import Dict, List, Any, Set, Optional
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
+FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
+LIVE_EVENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "live_events")
+os.makedirs(LIVE_EVENTS_DIR, exist_ok=True)
 
 
 class Stream:
@@ -27,13 +33,16 @@ class Stream:
         self.status = "starting"
         self.latest_detections = []
         self.latest_frame_cv2 = None
+        self.latest_frame_b64: str = ""  # base64 JPEG for viewer broadcast
+        self.last_alert_event_ts: int = 0
 
-        # All viewers connect here (unified for every stream type)
+        # All viewers connect here for frame + detection JSON
         self.viewer_wss: Set[WebSocket] = set()
 
         self._running = False
         self._ai_task = None
         self._capture_task = None
+        self._broadcast_task = None
 
     def to_dict(self):
         return {
@@ -43,6 +52,7 @@ class Stream:
             "source": self.source,
             "uid": self.uid,
             "device_id": self.device_id,
+            "status": self.status,
             "subscriber_count": len(self.viewer_wss),
         }
 
@@ -74,6 +84,8 @@ class StreamManager:
             stream._running = True
             if not skip_ai:
                 stream._ai_task = asyncio.create_task(self._ai_loop(stream))
+            # Start viewer broadcast loop for client_cam streams
+            stream._broadcast_task = asyncio.create_task(self._viewer_broadcast_loop(stream))
 
         return stream
 
@@ -93,6 +105,8 @@ class StreamManager:
             stream._ai_task.cancel()
         if stream._capture_task:
             stream._capture_task.cancel()
+        if stream._broadcast_task:
+            stream._broadcast_task.cancel()
 
         async def _safe_close(ws):
             try:
@@ -121,6 +135,7 @@ class StreamManager:
 
     # ---------------------------------------------- Server-side capture (RTSP / server_cam)
     async def _capture_and_broadcast_loop(self, stream: Stream):
+        """Capture frames for AI inference and broadcast to viewers for non-client streams."""
         source = stream.source
         if stream.type == "server_cam":
             try:
@@ -132,7 +147,7 @@ class StreamManager:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         while stream._running:
-            target_time = time.time() + 0.033  # ~30 FPS
+            target_time = time.time() + 0.1  # ~10 FPS
             ret, frame = await asyncio.to_thread(cap.read)
 
             if not ret:
@@ -147,16 +162,43 @@ class StreamManager:
 
             stream.latest_frame_cv2 = frame
 
-            # Encode and broadcast as raw binary JPEG
-            ret_enc, buffer = await asyncio.to_thread(
-                cv2.imencode, '.jpg', frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+            # Encode frame for viewer broadcast
+            ret_enc, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
             if ret_enc:
-                self._broadcast_bytes(stream, buffer.tobytes())
+                b64_frame = base64.b64encode(buffer).decode("utf-8")
+                stream.latest_frame_b64 = b64_frame
+                payload = {
+                    "type": "frame",
+                    "frame": b64_frame,
+                    "detections": stream.latest_detections,
+                    "timestamp": int(time.time() * 1000),
+                }
+                self._broadcast_text(stream, json.dumps(payload))
 
             wait_time = target_time - time.time()
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
+
+    # ---------------------------------------------- Viewer broadcast (client_cam)
+    async def _viewer_broadcast_loop(self, stream: Stream):
+        """
+        Broadcast the latest frame + detections to viewers at ~10 FPS.
+        For client_cam streams where frames arrive via WebSocket.
+        """
+        while stream._running:
+            try:
+                if stream.latest_frame_b64 and stream.viewer_wss:
+                    payload = {
+                        "type": "frame",
+                        "frame": stream.latest_frame_b64,
+                        "detections": stream.latest_detections,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                    self._broadcast_text(stream, json.dumps(payload))
+                await asyncio.sleep(0.1)  # ~10 FPS
+            except Exception as e:
+                logger.error(f"Viewer broadcast error: {e}")
+                await asyncio.sleep(0.5)
 
     # ------------------------------------------------------------------ AI loop
     async def _ai_loop(self, stream: Stream):
@@ -196,11 +238,12 @@ class StreamManager:
                     weapon_det = next(d for d in detections if d.get("is_weapon"))
                     notification_manager.send_alert(
                         uid=stream.uid,
-                        title=f"🚨 Weapon Detected on Live Stream: {stream.name}",
+                        title=f"Weapon Detected on Live Stream: {stream.name}",
                         message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence."
                     )
+                    self._persist_live_alert_event(stream, frame, detections)
 
-                # Broadcast detection results as text JSON to all viewers
+                # Broadcast detection-only update (frames are sent by broadcast loop)
                 det_payload = json.dumps({
                     "type": "detections",
                     "detections": detections,
@@ -214,29 +257,53 @@ class StreamManager:
                 logger.error(f"AI Loop error: {e}")
                 await asyncio.sleep(1)
 
-    # ---------------------------------------------------------- Broadcast helpers
-    def _broadcast_bytes(self, stream: Stream, data: bytes):
-        """Send raw binary JPEG to all viewers — single task, batched via gather."""
-        viewers = list(stream.viewer_wss)
-        if viewers:
-            asyncio.create_task(self._send_all_bytes(viewers, data, stream.viewer_wss))
+    def _persist_live_alert_event(self, stream: Stream, frame, detections: List[Dict[str, Any]]):
+        """
+        Persist alert evidence (snapshot + detection metadata) for later VLM retrieval.
+        """
+        now_ms = int(time.time() * 1000)
+        if now_ms - stream.last_alert_event_ts < 2500:
+            return
+        stream.last_alert_event_ts = now_ms
 
+        weapon_dets = [d for d in detections if d.get("is_weapon")]
+        if not weapon_dets:
+            return
+
+        try:
+            event_id = str(uuid.uuid4())
+            uid_dir = os.path.join(LIVE_EVENTS_DIR, stream.uid)
+            os.makedirs(uid_dir, exist_ok=True)
+            image_name = f"{event_id}.jpg"
+            image_path = os.path.join(uid_dir, image_name)
+            cv2.imwrite(image_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+
+            event = {
+                "id": event_id,
+                "uid": stream.uid,
+                "stream_id": stream.id,
+                "stream_name": stream.name,
+                "timestamp": now_ms,
+                "classes": [d.get("class_name") for d in weapon_dets],
+                "top_confidence": max(float(d.get("confidence", 0.0)) for d in weapon_dets),
+                "detections": detections,
+                "snapshot_url": f"/live-events/{stream.uid}/{image_name}",
+            }
+
+            requests.put(
+                f"{FIREBASE_RTDB_BASE}/live_events/{stream.uid}/{event_id}.json",
+                json=event,
+                timeout=4,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to persist live alert event for stream {stream.id}: {exc}")
+
+    # ---------------------------------------------------------- Broadcast helpers
     def _broadcast_text(self, stream: Stream, data_str: str):
-        """Send text JSON to all viewers — single task, batched via gather."""
+        """Send text JSON (detection results / frames) to all viewers."""
         viewers = list(stream.viewer_wss)
         if viewers:
             asyncio.create_task(self._send_all_text(viewers, data_str, stream.viewer_wss))
-
-    async def _send_all_bytes(self, viewers, data: bytes, wss_set: Set[WebSocket]):
-        """Batch-send binary data to all viewers concurrently."""
-        async def _one(ws: WebSocket):
-            try:
-                await asyncio.wait_for(ws.send_bytes(data), timeout=0.15)
-            except asyncio.TimeoutError:
-                pass  # Skip frame for slow viewer
-            except Exception:
-                wss_set.discard(ws)
-        await asyncio.gather(*[_one(ws) for ws in viewers])
 
     async def _send_all_text(self, viewers, data_str: str, wss_set: Set[WebSocket]):
         """Batch-send text data to all viewers concurrently."""

@@ -1,4 +1,6 @@
 @echo off
+setlocal
+
 cd backend
 call ..\.venv\Scripts\activate.bat
 

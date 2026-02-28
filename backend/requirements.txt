@@ -10,5 +10,7 @@ pillow
 numpy
 python-multipart
 websockets
+requests
 transformers
 timm
+PyJWT
