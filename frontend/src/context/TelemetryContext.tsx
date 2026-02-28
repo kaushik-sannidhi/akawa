@@ -97,18 +97,34 @@ export const TelemetryProvider = ({ children }: { children: ReactNode }) => {
 
     const logSysEvent = async (msg: string) => {
         if (!dbInstance || !uid) return;
-        const logsRef = ref(dbInstance, `telemetry/${uid}/logs`);
-        const todayStr = new Date().toISOString().substring(0, 10);
-        const timeStr = new Date().toLocaleTimeString();
-        await push(logsRef, `[${todayStr} ${timeStr}] ${msg}`);
+
+        // Prevent crashes if network is unstable during heavy upload
+        if (typeof window !== 'undefined' && !window.navigator.onLine) {
+            console.warn("Telemetry: OFFLINE. Dropping log:", msg);
+            return;
+        }
+
+        try {
+            const logsRef = ref(dbInstance, `telemetry/${uid}/logs`);
+            const todayStr = new Date().toISOString().substring(0, 10);
+            const timeStr = new Date().toLocaleTimeString();
+            await push(logsRef, `[${todayStr} ${timeStr}] ${msg}`);
+        } catch (err) {
+            console.error("Telemetry: Persistent session error (dropping log):", err);
+        }
     };
 
     const updateActiveNodes = async (change: number) => {
         if (!dbInstance || !uid) return;
-        const nodeRef = ref(dbInstance, `telemetry/${uid}/activeNodes`);
-        const snapshot = await get(nodeRef);
-        const current = snapshot.val() || 0;
-        await set(nodeRef, Math.max(0, current + change));
+
+        try {
+            const nodeRef = ref(dbInstance, `telemetry/${uid}/activeNodes`);
+            const snapshot = await get(nodeRef);
+            const current = snapshot.val() || 0;
+            await set(nodeRef, Math.max(0, current + change));
+        } catch (err) {
+            console.error("Telemetry: Failed to update node count:", err);
+        }
     };
 
     return (

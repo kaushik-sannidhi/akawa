@@ -81,6 +81,7 @@ export default function VideoPlayer({
                         if (!line.startsWith("data: ")) continue;
                         try {
                             const payload = JSON.parse(line.slice(6));
+                            if (!payload) continue;
 
                             if (payload.type === "start") {
                                 setAnalysisStatus(`ANALYZING ${payload.total_samples} FRAMES...`);
