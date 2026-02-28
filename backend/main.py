@@ -20,10 +20,16 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Weapon Detection API")
 
-# Setup CORS for local frontend + *.ingeniumstem.org deployments
+# Setup CORS — allow local dev, itsakawa.tech, Vercel, ingeniumstem, Cloudflare Pages
 default_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "https://itsakawa.tech",
+    "https://www.itsakawa.tech",
+    "https://akawa.vercel.app",
+    "https://backend.ingeniumstem.org",
 ]
 env_origins = os.getenv("BACKEND_CORS_ORIGINS", "")
 configured_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
@@ -32,7 +38,8 @@ allow_origins = configured_origins if configured_origins else default_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)?ingeniumstem\.org",
+    # Match any subdomain of itsakawa.tech, vercel.app, ingeniumstem.org, or pages.dev
+    allow_origin_regex=r"https://([a-zA-Z0-9\-]+\.)?(itsakawa\.tech|vercel\.app|ingeniumstem\.org|pages\.dev)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,6 +77,16 @@ def get_detector(model_id: str = "latest"):
 def list_models():
     """Returns all available trained models from runs/detect/."""
     return {"models": WeaponDetector.list_available_models()}
+
+
+@app.get("/api/health")
+def health_check():
+    """Simple health endpoint for tunnel / load-balancer probes."""
+    return {
+        "status": "ok",
+        "gpu": torch.cuda.is_available(),
+        "model_loaded": global_detector is not None,
+    }
 
 
 @app.on_event("startup")

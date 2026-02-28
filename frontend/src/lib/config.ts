@@ -4,13 +4,14 @@ export const getBaseUrl = () => {
     }
 
     // Default to the Cloudflare tunnel domain on non-local hosts
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
+    if (typeof window !== 'undefined'
+        && window.location.hostname !== 'localhost'
+        && window.location.hostname !== '127.0.0.1') {
         return "https://backend.ingeniumstem.org";
     }
 
     // Fallback for local development
-    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    return `http://${host}:8000`;
+    return "http://localhost:8000";
 };
 
 export const getWsUrl = () => {
@@ -18,17 +19,26 @@ export const getWsUrl = () => {
         return process.env.NEXT_PUBLIC_WS_URL.replace(/\/$/, "");
     }
     const baseUrl = getBaseUrl();
-    if (baseUrl.startsWith("https://")) {
-        return baseUrl.replace("https://", "wss://");
-    } else if (baseUrl.startsWith("http://")) {
-        return baseUrl.replace("http://", "ws://");
-    }
+    return baseUrl
+        .replace(/^https:\/\//, "wss://")
+        .replace(/^http:\/\//, "ws://");
+};
 
-    // Default to secure Cloudflare wss on non-local hosts
-    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-        return "wss://backend.ingeniumstem.org";
+/**
+ * Lightweight backend health probe.
+ * Returns true if the backend responds within `timeoutMs`.
+ */
+export const checkBackendHealth = async (timeoutMs = 5000): Promise<boolean> => {
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const res = await fetch(`${getBaseUrl()}/api/health`, {
+            signal: controller.signal,
+            cache: "no-store",
+        });
+        clearTimeout(timer);
+        return res.ok;
+    } catch {
+        return false;
     }
-
-    const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-    return `ws://${host}:8000`;
 };

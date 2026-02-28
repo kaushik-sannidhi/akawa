@@ -61,6 +61,8 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
 
         try {
             const uid = auth.currentUser?.uid || "anonymous";
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 10000);
             const res = await fetch(`${getBaseUrl()}/api/streams`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -71,8 +73,10 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                     uid,
                     model_id: "latest",
                     device_id: deviceId
-                })
+                }),
+                signal: controller.signal,
             });
+            clearTimeout(timer);
 
             if (!res.ok) {
                 const errorText = await res.text();

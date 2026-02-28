@@ -31,11 +31,15 @@ export default function VideoUpload({ onUploadComplete }: { onUploadComplete: (d
         formData.append("uid", auth.currentUser?.uid || "anonymous");
 
         try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 120000); // 2 min for large files
             const res = await fetch(`${getBaseUrl()}/api/upload`, {
                 method: "POST",
                 body: formData,
+                signal: controller.signal,
             });
-            if (!res.ok) throw new Error("INGESTION_FAILED");
+            clearTimeout(timer);
+            if (!res.ok) throw new Error(`INGESTION_FAILED (HTTP ${res.status})`);
             const data = await res.json();
             logSysEvent(`[INFO] INGESTION COMPLETE. BINDING ANALYSIS ENGINE TO [${file.name.toUpperCase()}]`);
             onUploadComplete(data);

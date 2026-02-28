@@ -23,11 +23,20 @@ export default function LiveStreamPage() {
         if (loading) return;
         try {
             const uid = user?.uid || "anonymous";
-            const res = await fetch(`${getBaseUrl()}/api/streams?uid=${uid}&_t=${Date.now()}`, { cache: 'no-store' });
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 8000);
+            const res = await fetch(`${getBaseUrl()}/api/streams?uid=${uid}&_t=${Date.now()}`, {
+                cache: 'no-store',
+                signal: controller.signal,
+            });
+            clearTimeout(timer);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             if (data.streams) setStreams(data.streams);
-        } catch (err) {
-            console.error("Failed to fetch streams", err);
+        } catch (err: any) {
+            if (err.name !== 'AbortError') {
+                console.error("Failed to fetch streams (backend may be unreachable):", err.message);
+            }
         }
     };
 
@@ -42,12 +51,14 @@ export default function LiveStreamPage() {
         try {
             const uid = user?.uid || "anonymous";
             if (cascadeDelete) {
-                await fetch(`${getBaseUrl()}/api/streams/${id}?uid=${uid}`, { method: "DELETE" });
+                const res = await fetch(`${getBaseUrl()}/api/streams/${id}?uid=${uid}`, { method: "DELETE" });
+                if (!res.ok) console.warn(`Delete returned HTTP ${res.status}`);
             }
             logSysEvent(`[WARN] SENSOR PROXY ${id.substring(0, 6).toUpperCase()} TERMINATED`);
+            setStreams(prev => prev.filter(s => s.id !== id));  // Optimistic removal
             fetchStreams();
-        } catch (err) {
-            console.error("Failed to delete", err);
+        } catch (err: any) {
+            console.error("Failed to delete stream:", err.message);
         }
     };
 
