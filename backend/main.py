@@ -455,17 +455,38 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
     return {"status": "success"}
 
 
+class ProviderPeerRequest(BaseModel):
+    peer_id: str
 
 
+@app.post("/api/streams/{stream_id}/provider")
+async def register_provider_peer(stream_id: str, req: ProviderPeerRequest):
+    """Camera provider registers its PeerJS peer ID so viewers can call it."""
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        return {"status": "error", "message": "Stream not found"}
+    stream.provider_peer_id = req.peer_id
+    print(f"[WEBRTC] Provider peer registered: {req.peer_id} for stream {stream_id}")
+    return {"status": "success", "peer_id": req.peer_id}
 
-# ==================== Stream Input (frames from camera provider) ====================
+
+@app.get("/api/streams/{stream_id}/provider")
+async def get_provider_peer(stream_id: str):
+    """Viewers fetch the provider's PeerJS peer ID to initiate a WebRTC call."""
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        return {"status": "error", "message": "Stream not found", "peer_id": ""}
+    return {"status": "success", "peer_id": stream.provider_peer_id}
+
+
+# ==================== Stream Input (frames from camera provider — AI only) ====================
 
 
 @app.websocket("/ws/stream_in/{stream_id}")
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
-    Receives binary JPEG frames from the camera provider.
-    IMMEDIATELY relays raw bytes to viewers, then decodes for AI in background.
+    Receives binary JPEG frames from the camera provider FOR AI INFERENCE ONLY.
+    Video is delivered to viewers via WebRTC (PeerJS), not through this WebSocket.
     """
     import asyncio as _aio
 
@@ -475,7 +496,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    logger.info(f"[WS IN] Camera provider connected on stream {stream_id}")
+    logger.info(f"[WS IN] Camera provider connected on stream {stream_id} (AI frames only)")
     stream.status = "active"
     stream_manager.ensure_ai_task(stream)
 
@@ -490,11 +511,8 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
             if "bytes" in message and message["bytes"]:
                 jpeg_bytes = message["bytes"]
 
-                # 1. BROADCAST IMMEDIATELY — zero decode delay for viewers
-                from app.stream_manager import stream_manager as sm
-                sm._broadcast_bytes(stream, jpeg_bytes)
-
-                # 2. Decode for AI in background (fire-and-forget)
+                # Decode for AI in background (fire-and-forget)
+                # No binary relay — WebRTC handles video delivery to viewers
                 async def _bg_decode(data: bytes):
                     frame = await _aio.to_thread(_decode_jpeg, data)
                     if frame is not None:
@@ -510,14 +528,15 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
             stream.status = "waiting_for_client"
 
 
-# ==================== Stream Output (frames + detections to viewers) ====================
+# ==================== Stream Output (detection JSON only — video via WebRTC) ====================
 
 
 @app.websocket("/ws/stream_out/{stream_id}")
 async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     """
-    Viewers subscribe here.
-    Binary messages = JPEG frames, Text messages = detection JSON.
+    Viewers subscribe here for AI detection overlay data ONLY.
+    Video frames are delivered directly via WebRTC (PeerJS), not through this WS.
+    Text messages = detection JSON.
     """
     await websocket.accept()
     stream = stream_manager.get_stream(stream_id)
@@ -525,11 +544,11 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    logger.info(f"[WS OUT] Viewer connected to stream {stream_id} (type={stream.type})")
+    logger.info(f"[WS OUT] Viewer connected to stream {stream_id} for detection data")
     stream.viewer_wss.add(websocket)
     try:
         while stream._running and stream_manager.get_stream(stream_id):
-            # Use generic receive() to handle text pings, binary, or disconnect
+            # Use generic receive() to handle text pings or disconnect
             await websocket.receive()
     except WebSocketDisconnect:
         pass

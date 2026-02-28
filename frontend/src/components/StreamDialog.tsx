@@ -176,6 +176,15 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                         )}
                     </div>
 
+                    {streamType === "client_cam" && (
+                        <div className="flex items-center gap-3 px-1">
+                            <span className="text-[10px] font-bold text-[var(--color-silica)]">AUDIO_CAPTURE</span>
+                            <div className="flex items-center gap-2">
+                                <span className="text-[9px] text-[var(--color-data)]">Enabled by default — audio transmitted via WebRTC</span>
+                            </div>
+                        </div>
+                    )}
+
                     <button
                         type="submit"
                         disabled={loading}

@@ -28,7 +28,10 @@ class Stream:
         self.latest_detections = []
         self.latest_frame_cv2 = None
 
-        # All viewers connect here (unified for every stream type)
+        # PeerJS peer ID of the camera provider (set via REST)
+        self.provider_peer_id: str = ""
+
+        # All viewers connect here for detection JSON only (no binary frames)
         self.viewer_wss: Set[WebSocket] = set()
 
         self._running = False
@@ -121,6 +124,7 @@ class StreamManager:
 
     # ---------------------------------------------- Server-side capture (RTSP / server_cam)
     async def _capture_and_broadcast_loop(self, stream: Stream):
+        """Capture frames for AI inference only — video is NOT relayed (WebRTC handles that)."""
         source = stream.source
         if stream.type == "server_cam":
             try:
@@ -132,7 +136,7 @@ class StreamManager:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         while stream._running:
-            target_time = time.time() + 0.033  # ~30 FPS
+            target_time = time.time() + 0.1  # ~10 FPS for AI (no broadcast needed)
             ret, frame = await asyncio.to_thread(cap.read)
 
             if not ret:
@@ -146,13 +150,6 @@ class StreamManager:
                 frame = cv2.resize(frame, (target_width, int(height * scale)))
 
             stream.latest_frame_cv2 = frame
-
-            # Encode and broadcast as raw binary JPEG
-            ret_enc, buffer = await asyncio.to_thread(
-                cv2.imencode, '.jpg', frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if ret_enc:
-                self._broadcast_bytes(stream, buffer.tobytes())
 
             wait_time = target_time - time.time()
             if wait_time > 0:
@@ -215,28 +212,11 @@ class StreamManager:
                 await asyncio.sleep(1)
 
     # ---------------------------------------------------------- Broadcast helpers
-    def _broadcast_bytes(self, stream: Stream, data: bytes):
-        """Send raw binary JPEG to all viewers — single task, batched via gather."""
-        viewers = list(stream.viewer_wss)
-        if viewers:
-            asyncio.create_task(self._send_all_bytes(viewers, data, stream.viewer_wss))
-
     def _broadcast_text(self, stream: Stream, data_str: str):
-        """Send text JSON to all viewers — single task, batched via gather."""
+        """Send text JSON (detection results) to all viewers."""
         viewers = list(stream.viewer_wss)
         if viewers:
             asyncio.create_task(self._send_all_text(viewers, data_str, stream.viewer_wss))
-
-    async def _send_all_bytes(self, viewers, data: bytes, wss_set: Set[WebSocket]):
-        """Batch-send binary data to all viewers concurrently."""
-        async def _one(ws: WebSocket):
-            try:
-                await asyncio.wait_for(ws.send_bytes(data), timeout=0.15)
-            except asyncio.TimeoutError:
-                pass  # Skip frame for slow viewer
-            except Exception:
-                wss_set.discard(ws)
-        await asyncio.gather(*[_one(ws) for ws in viewers])
 
     async def _send_all_text(self, viewers, data_str: str, wss_set: Set[WebSocket]):
         """Batch-send text data to all viewers concurrently."""
