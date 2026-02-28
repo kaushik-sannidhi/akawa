@@ -1,274 +1,66 @@
-from ultralytics import YOLO
 import os
-import torch
+import requests
+import cv2
+import base64
 import threading
 
-# Weapon classes from both datasets that should trigger alerts
-# merged_dataset: rifle, handgun, knife
-# Master_Weapon_Dataset: weapon
 WEAPON_CLASSES = {"rifle", "handgun", "knife", "weapon"}
-
+MODAL_PREDICT_URL = "https://kaushik-sannidhi--akawa-weapon-detector-weapondetectormodel-predict.modal.run"
 
 class WeaponDetector:
     def __init__(self, model_path=None):
-        """
-        Initializes the YOLO-based weapon detector.
-        If model_path is a directory name under runs/detect, loads from there.
-        Otherwise auto-discovers the latest fine-tuned model, or falls back to yolo11m.pt.
-        """
         self.lock = threading.Lock()
-        resolved_path = self._resolve_model_path(model_path)
-
-        self.use_half = torch.cuda.is_available()
-
-        try:
-            print(f"[WeaponDetector] Loading YOLO model from {resolved_path}")
-            self.model = YOLO(resolved_path)
-            if torch.cuda.is_available():
-                self.model.to("cuda")
-                # Warmup inference to catch CUDA kernel incompatibility early
-                try:
-                    import numpy as _np
-                    _dummy = _np.zeros((64, 64, 3), dtype=_np.uint8)
-                    self.model.predict(_dummy, verbose=False, half=self.use_half, imgsz=64)
-                    print(f"[WeaponDetector] Model loaded on GPU (CUDA) with FP16={self.use_half}")
-                except RuntimeError as cuda_err:
-                    if "CUDA" in str(cuda_err) or "no kernel image" in str(cuda_err):
-                        print(f"[WeaponDetector] CUDA kernel error during warmup: {cuda_err}")
-                        print(f"[WeaponDetector] Falling back to CPU")
-                        self.model.to("cpu")
-                        self.use_half = False
-                    else:
-                        raise
-            else:
-                print(f"[WeaponDetector] CUDA not available, running on CPU")
-        except Exception as e:
-            print(f"[WeaponDetector] Failed to load {resolved_path}: {e}")
-            fallback = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "yolo11m.pt")
-            print(f"[WeaponDetector] Falling back to {fallback}")
-            self.model = YOLO(fallback)
-            self.use_half = False
-            if torch.cuda.is_available():
-                try:
-                    self.model.to("cuda")
-                except Exception:
-                    print(f"[WeaponDetector] GPU fallback also failed, staying on CPU")
-                    self.model.to("cpu")
-
-    def _resolve_model_path(self, model_path):
-        """Resolves a model path from an ID or finds the latest one."""
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        runs_dir = os.path.join(project_root, "runs", "detect")
-
-        # If it's a specific run name (e.g. "weapon_detector" or "train_weapons_sanity")
-        if model_path and model_path not in (None, "latest"):
-            specific = os.path.join(runs_dir, model_path, "weights", "best.pt")
-            if os.path.exists(specific):
-                print(f"[WeaponDetector] Using specific model: {specific}")
-                return specific
-            # Also check if it's a direct path
-            if os.path.exists(model_path):
-                return model_path
-
-        # Auto-discover latest
-        latest = self._get_latest_trained_model()
-        if latest:
-            return latest
-
-        # Fallback to base model
-        return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "yolo11m.pt")
-
-    def _get_latest_trained_model(self):
-        """Scans the runs/detect directory to find the most recently trained weights."""
-        runs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "runs", "detect")
-        if not os.path.exists(runs_dir):
-            return None
-
-        subdirs = [os.path.join(runs_dir, d) for d in os.listdir(runs_dir) if os.path.isdir(os.path.join(runs_dir, d))]
-        if not subdirs:
-            return None
-
-        subdirs.sort(key=lambda x: os.path.getmtime(x), reverse=True)
-
-        for folder in subdirs:
-            best_pt_path = os.path.join(folder, "weights", "best.pt")
-            if os.path.exists(best_pt_path):
-                print(f"[WeaponDetector] Found fine-tuned model: {best_pt_path}")
-                return best_pt_path
-
-        return None
+        print(f"[WeaponDetector] Initialized Modal API Client to {MODAL_PREDICT_URL}")
 
     @staticmethod
     def list_available_models():
-        """Lists all available trained models from runs/detect/."""
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        runs_dir = os.path.join(project_root, "runs", "detect")
-        models = []
+        return [{"id": "latest", "name": "Modal Cloud API"}]
 
-        # Always include "latest" as auto-select option
-        models.append({"id": "latest", "name": "Latest (Auto-Select)"})
+    def _encode_frame(self, frame):
+        # Encode cv2 frame to JPEG base64 for HTTP transfer
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        b64_str = base64.b64encode(buffer).decode('utf-8')
+        return b64_str
 
-        if os.path.exists(runs_dir):
-            for d in sorted(os.listdir(runs_dir)):
-                full = os.path.join(runs_dir, d)
-                if os.path.isdir(full):
-                    best = os.path.join(full, "weights", "best.pt")
-                    if os.path.exists(best):
-                        # Read args.yaml for metadata if available
-                        label = d.replace("_", " ").title()
-                        models.append({"id": d, "name": label})
-
-        return models
-
-    @torch.inference_mode()
     def process_frame(self, frame):
         """
-        Runs YOLO inference on a single frame with max speed optimizations.
-        Returns a list of detection dicts with normalized bounding boxes.
+        Sends a single frame to the Modal API.
         """
-        with self.lock:
-            try:
-                results = self.model.track(
-                    frame,
-                    verbose=False,
-                    half=self.use_half,
-                    imgsz=448,
-                    persist=True,
-                    tracker="botsort.yaml",
-                    agnostic_nms=True,
-                    max_det=20,
-                )
-            except RuntimeError as e:
-                if "CUDA" in str(e) or "no kernel image" in str(e):
-                    print(f"[WeaponDetector] CUDA error during inference, moving to CPU: {e}")
-                    self.model.to("cpu")
-                    self.use_half = False
-                    results = self.model.track(
-                        frame,
-                        verbose=False,
-                        half=False,
-                        imgsz=448,
-                        persist=True,
-                        tracker="botsort.yaml",
-                        agnostic_nms=True,
-                        max_det=20,
-                    )
-                else:
-                    raise
+        try:
+            b64_str = self._encode_frame(frame)
+            resp = requests.post(
+                MODAL_PREDICT_URL,
+                json={"image": b64_str, "is_batch": False},
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("detections", [])
+            else:
+                print(f"[WeaponDetector] Modal API Error {resp.status_code}: {resp.text}")
+                return []
+        except Exception as e:
+            print(f"[WeaponDetector] Request failed: {e}")
+            return []
 
-        detections = []
-        names = self.model.names
-        for r in results:
-            boxes = r.boxes
-            if boxes is None or len(boxes) == 0:
-                continue
-
-            # Vectorised tensor access — pull all at once, then iterate on CPU
-            confs = boxes.conf.cpu().numpy()
-            clss = boxes.cls.cpu().int().numpy()
-            xyxyn = boxes.xyxyn.cpu().numpy()
-            ids = boxes.id.cpu().int().numpy() if boxes.id is not None else None
-
-            for i in range(len(confs)):
-                conf = float(confs[i])
-                if conf < 0.20:
-                    continue
-                cls_id = int(clss[i])
-                nx1, ny1, nx2, ny2 = float(xyxyn[i][0]), float(xyxyn[i][1]), float(xyxyn[i][2]), float(xyxyn[i][3])
-                track_id = int(ids[i]) if ids is not None else None
-                cls_name = names.get(cls_id, f"class_{cls_id}").lower()
-
-                detections.append({
-                    "id": f"det_{track_id}" if track_id else f"det_{cls_id}_{nx1:.2f}_{ny1:.2f}",
-                    "track_id": track_id,
-                    "class_id": cls_id,
-                    "class_name": cls_name,
-                    "confidence": round(conf, 3),
-                    "is_weapon": cls_name in WEAPON_CLASSES,
-                    "bbox": {
-                        "x1": nx1,
-                        "y1": ny1,
-                        "x2": nx2,
-                        "y2": ny2,
-                    },
-                })
-
-        return detections
-
-    @torch.inference_mode()
     def process_batch(self, frames):
         """
-        Batch inference: process multiple frames at once for GPU efficiency.
-        Returns a list of per-frame detection lists.
+        Sends multiple frames at once to the Modal API.
         """
-        all_detections = []
+        try:
+            b64_list = [self._encode_frame(f) for f in frames]
+            resp = requests.post(
+                MODAL_PREDICT_URL,
+                json={"images": b64_list, "is_batch": True},
+                timeout=10.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get("detections", [[]] * len(frames))
+            else:
+                print(f"[WeaponDetector] Modal API Batch Error {resp.status_code}: {resp.text}")
+                return [[]] * len(frames)
+        except Exception as e:
+            print(f"[WeaponDetector] Request failed: {e}")
+            return [[]] * len(frames)
 
-        with self.lock:
-            try:
-                results = self.model.track(
-                    frames,
-                    verbose=False,
-                    half=self.use_half,
-                    imgsz=448,
-                    persist=True,
-                    tracker="botsort.yaml",
-                    agnostic_nms=True,
-                    max_det=20,
-                )
-            except RuntimeError as e:
-                if "CUDA" in str(e) or "no kernel image" in str(e):
-                    print(f"[WeaponDetector] CUDA error during batch inference, moving to CPU: {e}")
-                    self.model.to("cpu")
-                    self.use_half = False
-                    results = self.model.track(
-                        frames,
-                        verbose=False,
-                        half=False,
-                        imgsz=448,
-                        persist=True,
-                        tracker="botsort.yaml",
-                        agnostic_nms=True,
-                        max_det=20,
-                    )
-                else:
-                    raise
-
-        names = self.model.names
-        for r in results:
-            frame_dets = []
-            boxes = r.boxes
-            if boxes is None or len(boxes) == 0:
-                all_detections.append(frame_dets)
-                continue
-
-            confs = boxes.conf.cpu().numpy()
-            clss = boxes.cls.cpu().int().numpy()
-            xyxyn = boxes.xyxyn.cpu().numpy()
-            ids = boxes.id.cpu().int().numpy() if boxes.id is not None else None
-
-            for i in range(len(confs)):
-                conf = float(confs[i])
-                if conf < 0.20:
-                    continue
-                cls_id = int(clss[i])
-                nx1, ny1, nx2, ny2 = float(xyxyn[i][0]), float(xyxyn[i][1]), float(xyxyn[i][2]), float(xyxyn[i][3])
-                track_id = int(ids[i]) if ids is not None else None
-                cls_name = names.get(cls_id, f"class_{cls_id}").lower()
-
-                frame_dets.append({
-                    "id": f"det_{track_id}" if track_id else f"det_{cls_id}_{nx1:.2f}_{ny1:.2f}",
-                    "track_id": track_id,
-                    "class_id": cls_id,
-                    "class_name": cls_name,
-                    "confidence": round(conf, 3),
-                    "is_weapon": cls_name in WEAPON_CLASSES,
-                    "bbox": {
-                        "x1": nx1,
-                        "y1": ny1,
-                        "x2": nx2,
-                        "y2": ny2,
-                    },
-                })
-            all_detections.append(frame_dets)
-
-        return all_detections

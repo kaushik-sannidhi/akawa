@@ -8,6 +8,7 @@ import { getBaseUrl } from "@/lib/config";
 import { useSettings } from "@/context/SettingsContext";
 import { auth } from "@/lib/firebase";
 import { Bell, X } from "lucide-react";
+import { analyzeVideoWithVLM } from "@/lib/vlmApi";
 
 const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"];
 
@@ -60,6 +61,7 @@ export default function UploadAnalysisPage() {
                         confidence: a.confidence,
                         startTimestamp: a.startTimestamp,
                         endTimestamp: a.endTimestamp,
+                        vlm_analysis: a.vlmAnalysis || null,
                     })),
                 }),
             });
@@ -81,6 +83,40 @@ export default function UploadAnalysisPage() {
             }
         }, 3000);
     };
+
+    // Listen for custom event containing the generated WebM clips
+    useEffect(() => {
+        const handleClipGenerated = async (e: Event) => {
+            const customEvent = e as CustomEvent;
+            const { videoId, timestamp, videoBlob } = customEvent.detail;
+
+            // Ensure this clip belongs to the active video
+            if (videoData?.video_id !== videoId) return;
+
+            // Mark the corresponding alert as currently analyzing
+            setAlerts(prev => prev.map(a =>
+                (Math.abs(a.startTimestamp - timestamp) < 5.0 && !a.vlmAnalysis)
+                    ? { ...a, vlmAnalysis: "ANALYZING..." }
+                    : a
+            ));
+
+            const response = await analyzeVideoWithVLM({ videoBlob });
+
+            // Update the alert with the final text
+            setAlerts(prev => {
+                const updated = prev.map(a =>
+                    (Math.abs(a.startTimestamp - timestamp) < 5.0 && a.vlmAnalysis === "ANALYZING...")
+                        ? { ...a, vlmAnalysis: response.text || `[VLM ERROR] ${response.error}` }
+                        : a
+                );
+                debouncedSave(updated);
+                return updated;
+            });
+        };
+
+        window.addEventListener('awca_clip_generated', handleClipGenerated);
+        return () => window.removeEventListener('awca_clip_generated', handleClipGenerated);
+    }, [videoData?.video_id]);
 
     const handleNewAlerts = (detections: any[], timestamp: number) => {
         // Filter for weapon classes above the threshold
@@ -112,6 +148,7 @@ export default function UploadAnalysisPage() {
                             confidence: event.confidence,
                             startTimestamp: timestamp,
                             endTimestamp: timestamp,
+                            vlmAnalysis: null,
                         });
                     }
                 });
@@ -125,6 +162,7 @@ export default function UploadAnalysisPage() {
             });
         }
     };
+
 
     return (
         <div className="flex flex-col lg:flex-row gap-3 lg:gap-6 h-[calc(100dvh-6rem)] sm:h-[calc(100dvh-8rem)] font-mono uppercase tracking-widest text-[#FFF]">
