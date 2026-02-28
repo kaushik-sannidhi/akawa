@@ -99,12 +99,12 @@ export default function VideoPlayer({
                                 });
                                 setProgress(payload.progress);
 
-                                // Fire alerts for weapons found during analysis
-                                const weapons = payload.detections.filter(
-                                    (d: any) => WEAPON_CLASSES.includes(d.class_name)
+                                // Fire alerts for threats found during analysis
+                                const threats = payload.detections.filter(
+                                    (d: any) => d.is_threat || WEAPON_CLASSES.includes(d.class_name) || ["weapon", "fall", "violent_person"].includes(d.detection_type)
                                 );
-                                if (weapons.length > 0) {
-                                    onAlertRef.current(weapons, payload.timestamp);
+                                if (threats.length > 0) {
+                                    onAlertRef.current(threats, payload.timestamp);
                                     captureClipForAlert(payload.timestamp);
                                 }
 

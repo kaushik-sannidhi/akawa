@@ -161,7 +161,7 @@ class Qwen2VLModel:
         temp_video_path = None
         try:
             video_bytes = base64.b64decode(req.video_b64)
-            fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
+            fd, temp_video_path = tempfile.mkstemp(suffix=".webm")
             with os.fdopen(fd, 'wb') as f:
                 f.write(video_bytes)
 
@@ -623,17 +623,21 @@ class FastVisionAPI:
                 state["prev_gray"] = cv2.cvtColor(last_resized, cv2.COLOR_BGR2GRAY)
 
                 # ── 5. Threat priority ────────────────────────────────────
+                weapons_detected = (max_weapon_conf >= WEAPON_ALERT_THRESH) and weapon_dominant
+
+                # Always upgrade person markers if violence is active
+                if violence_detected:
+                    for d in person_detections:
+                        d.detection_type = "violent_person"
+
+                # ── 5. Threat priority ────────────────────────────────────
                 # weapon > fall > violence > none
-                # (Fall can coexist with a weapon; violence is moot if weapon present)
                 if weapons_detected:
                     threat_type = "weapon"
                 elif fall_detected:
                     threat_type = "fall"
                 elif violence_detected:
                     threat_type = "violence"
-                    # Upgrade person markers to violent_person for UI colouring
-                    for d in person_detections:
-                        d.detection_type = "violent_person"
                 else:
                     threat_type = "none"
 
@@ -795,9 +799,14 @@ class FastVisionAPI:
                 weapon_hit_ratio = len(weapon_confidences) / max((frame_count // 5), 1)
                 weapon_dominant  = weapon_hit_ratio >= WEAPON_DOMINANCE_RATIO
 
-                weapons_detected  = max_weapon_conf >= WEAPON_ALERT_THRESH
+                weapons_detected  = (max_weapon_conf >= WEAPON_ALERT_THRESH) and weapon_dominant
                 fall_detected     = max_fall_conf   >  FALL_CONFIRM_THRESH
                 violence_detected = (not weapon_dominant) and (max_brawl_conf > BRAWL_ALERT_THRESH)
+
+                if violence_detected:
+                    # Upgrade person markers to violent_person for UI colouring
+                    for d in all_person_dets:
+                        d.detection_type = "violent_person"
 
                 if weapons_detected:
                     threat_type = "weapon"
@@ -805,9 +814,6 @@ class FastVisionAPI:
                     threat_type = "fall"
                 elif violence_detected:
                     threat_type = "violence"
-                    # Upgrade person markers to violent_person for UI colouring
-                    for d in all_person_dets:
-                        d.detection_type = "violent_person"
                 else:
                     threat_type = "none"
 
