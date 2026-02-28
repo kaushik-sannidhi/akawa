@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class Stream:
     def __init__(self, name: str, stream_type: str, source: str, uid: str,
                  model_id: str = "latest", device_id: str = "",
-                 stream_id: str = None):
+                 stream_id: str = None, room_id: str = ""):
         self.id = stream_id if stream_id else str(uuid.uuid4())
         self.name = name
         self.type = stream_type
@@ -22,6 +22,7 @@ class Stream:
         self.uid = uid
         self.model_id = model_id
         self.device_id = device_id
+        self.room_id = room_id  # VideoSDK room ID for client_cam streams
         self.created_at = time.time()
 
         self.status = "starting"
@@ -31,10 +32,6 @@ class Stream:
         # WebSocket sets -------------------------------------------------------
         # Detection-result subscribers (viewers connect via /ws/stream_out)
         self.detection_wss: Set[WebSocket] = set()
-
-        # WebRTC signaling connections
-        self.provider_signal_ws: Optional[WebSocket] = None
-        self.viewer_signal_wss: Dict[str, WebSocket] = {}  # peer_id -> ws
 
         # Legacy viewer WS for fallback frame broadcast (server_cam / rtsp only)
         self.fallback_wss: Set[WebSocket] = set()
@@ -51,8 +48,9 @@ class Stream:
             "source": self.source,
             "uid": self.uid,
             "device_id": self.device_id,
+            "room_id": self.room_id,
             "status": self.status,
-            "subscriber_count": len(self.detection_wss) + len(self.viewer_signal_wss) + len(self.fallback_wss),
+            "subscriber_count": len(self.detection_wss) + len(self.fallback_wss),
         }
 
 
@@ -63,8 +61,9 @@ class StreamManager:
     # ------------------------------------------------------------------ CRUD
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
                    model_id: str = "latest", device_id: str = "",
-                   stream_id: str = None, skip_ai: bool = False) -> Stream:
-        stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id)
+                   stream_id: str = None, skip_ai: bool = False,
+                   room_id: str = "") -> Stream:
+        stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id, room_id)
         self.streams[stream.id] = stream
         logger.info(f"====== NEW STREAM CREATED ======")
         logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai}")
@@ -119,13 +118,6 @@ class StreamManager:
         for ws in list(stream.fallback_wss):
             await _safe_close(ws)
         stream.fallback_wss.clear()
-
-        # Close signaling connections
-        if stream.provider_signal_ws:
-            await _safe_close(stream.provider_signal_ws)
-        for ws in list(stream.viewer_signal_wss.values()):
-            await _safe_close(ws)
-        stream.viewer_signal_wss.clear()
 
         # Remove from dict AFTER all connections are closed
         self.streams.pop(stream_id, None)
@@ -255,39 +247,6 @@ class StreamManager:
             await ws.send_text(data_str)
         except Exception:
             wss_set.discard(ws)
-
-    # ---------------------------------------------------------- WebRTC Signaling
-    async def relay_signal_to_provider(self, stream: Stream, message: dict):
-        """Forward a signaling message to the camera provider."""
-        if stream.provider_signal_ws:
-            try:
-                await stream.provider_signal_ws.send_text(json.dumps(message))
-            except Exception:
-                stream.provider_signal_ws = None
-
-    async def relay_signal_to_viewer(self, stream: Stream, peer_id: str,
-                                     message: dict):
-        """Forward a signaling message to a specific viewer."""
-        ws = stream.viewer_signal_wss.get(peer_id)
-        if ws:
-            try:
-                await ws.send_text(json.dumps(message))
-            except Exception:
-                stream.viewer_signal_wss.pop(peer_id, None)
-
-    async def notify_provider_viewer_joined(self, stream: Stream, peer_id: str):
-        """Tell the camera provider that a new viewer wants a WebRTC connection."""
-        await self.relay_signal_to_provider(stream, {
-            "type": "viewer-joined",
-            "peerId": peer_id,
-        })
-
-    async def notify_provider_viewer_left(self, stream: Stream, peer_id: str):
-        """Tell the camera provider a viewer disconnected."""
-        await self.relay_signal_to_provider(stream, {
-            "type": "viewer-left",
-            "peerId": peer_id,
-        })
 
 
 stream_manager = StreamManager()

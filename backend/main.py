@@ -94,8 +94,9 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     stream_id=st_id,
                     # Don't start AI loop for restored client_cam streams — no
                     # provider is feeding frames yet.  The AI task is started
-                    # when a provider actually connects (provider-ready msg).
+                    # when the provider connects and sends first frame.
                     skip_ai=(st_data.get("type") == "client_cam"),
+                    room_id=st_data.get("room_id", ""),
                 )
                 print(f"[RESTORE] Restored stream {st_id} ({st_data.get('type', 'unknown')}) for {user_uid}")
     except Exception as exc:
@@ -397,6 +398,7 @@ class StreamCreateRequest(BaseModel):
     uid: str
     model_id: str = "latest"
     device_id: str = ""
+    room_id: str = ""
 
 
 @app.get("/api/streams")
@@ -420,6 +422,7 @@ async def create_stream(req: StreamCreateRequest):
         uid=req.uid,
         model_id=req.model_id,
         device_id=req.device_id,
+        room_id=req.room_id,
     )
     
     # Save to Firebase
@@ -431,6 +434,7 @@ async def create_stream(req: StreamCreateRequest):
             "uid": req.uid,
             "model_id": req.model_id,
             "device_id": req.device_id,
+            "room_id": req.room_id,
             "created_at": __import__("datetime").datetime.now().isoformat()
         }
         requests.put(f"{FIREBASE_RTDB_BASE}/streams/{req.uid}/{stream.id}.json", json=stream_data)
@@ -458,125 +462,6 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
     return {"status": "success"}
 
 
-# ==================== WebRTC Signaling Endpoint ====================
-
-
-@app.websocket("/ws/signal/{stream_id}")
-async def websocket_signal(websocket: WebSocket, stream_id: str):
-    """
-    WebRTC signaling relay for a specific stream.
-
-    The camera provider and each viewer connect here.
-    Messages are JSON with a "type" field:
-
-    From provider:
-      - { type: "provider-ready" }                          — register as the camera provider
-      - { type: "offer", peerId: "...", sdp: "..." }        — SDP offer targeted at a viewer
-      - { type: "answer", peerId: "...", sdp: "..." }       — SDP answer (unused normally, but supported)
-      - { type: "ice-candidate", peerId: "...", candidate: {...} } — ICE candidate for a specific viewer
-
-    From viewer:
-      - { type: "viewer-join", peerId: "..." }              — register as a viewer
-      - { type: "answer", peerId: "...", sdp: "..." }       — SDP answer back to provider
-      - { type: "ice-candidate", peerId: "...", candidate: {...} } — ICE candidate for provider
-    """
-    await websocket.accept()
-    stream = stream_manager.get_stream(stream_id)
-    if not stream:
-        await websocket.close(code=1008, reason="Stream not found")
-        return
-
-    role = None  # "provider" or "viewer"
-    peer_id = None
-
-    try:
-        while True:
-            # Break out of the loop if the stream was deleted while we were waiting
-            if not stream_manager.get_stream(stream_id):
-                break
-
-            raw = await websocket.receive_text()
-            msg = json.loads(raw)
-            msg_type = msg.get("type", "")
-
-            # ----- Provider registration
-            if msg_type == "provider-ready":
-                role = "provider"
-                stream.provider_signal_ws = websocket
-                stream.status = "active"
-                logger.info(f"[SIGNAL] Provider registered for stream {stream_id}")
-
-                # Start AI inference loop now that a provider is feeding frames
-                stream_manager.ensure_ai_task(stream)
-
-                # Tell provider about any viewers already connected
-                for vid in list(stream.viewer_signal_wss.keys()):
-                    await stream_manager.notify_provider_viewer_joined(stream, vid)
-
-            # ----- Viewer registration
-            elif msg_type == "viewer-join":
-                role = "viewer"
-                peer_id = msg.get("peerId", str(uuid.uuid4()))
-                stream.viewer_signal_wss[peer_id] = websocket
-                logger.info(f"[SIGNAL] Viewer {peer_id} joined stream {stream_id}")
-
-                # Notify provider so it creates a peer connection + offer
-                await stream_manager.notify_provider_viewer_joined(stream, peer_id)
-
-            # ----- SDP Offer (provider → viewer)
-            elif msg_type == "offer":
-                target_peer = msg.get("peerId")
-                if target_peer:
-                    await stream_manager.relay_signal_to_viewer(stream, target_peer, {
-                        "type": "offer",
-                        "sdp": msg.get("sdp"),
-                    })
-
-            # ----- SDP Answer (viewer → provider)
-            elif msg_type == "answer":
-                target_peer = msg.get("peerId")
-                await stream_manager.relay_signal_to_provider(stream, {
-                    "type": "answer",
-                    "peerId": target_peer or peer_id,
-                    "sdp": msg.get("sdp"),
-                })
-
-            # ----- ICE Candidate (both directions)
-            elif msg_type == "ice-candidate":
-                candidate = msg.get("candidate")
-                target_peer = msg.get("peerId")
-
-                if role == "provider" and target_peer:
-                    # Provider sending ICE to a specific viewer
-                    await stream_manager.relay_signal_to_viewer(stream, target_peer, {
-                        "type": "ice-candidate",
-                        "candidate": candidate,
-                    })
-                elif role == "viewer":
-                    # Viewer sending ICE to provider
-                    await stream_manager.relay_signal_to_provider(stream, {
-                        "type": "ice-candidate",
-                        "peerId": peer_id,
-                        "candidate": candidate,
-                    })
-
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        logger.error(f"[SIGNAL] Error in signaling WS for stream {stream_id}: {e}")
-    finally:
-        if role == "provider":
-            if stream_manager.get_stream(stream_id):
-                stream.provider_signal_ws = None
-                stream.status = "waiting_for_client"
-            logger.info(f"[SIGNAL] Provider disconnected from stream {stream_id}")
-        elif role == "viewer" and peer_id:
-            if stream_manager.get_stream(stream_id):
-                stream.viewer_signal_wss.pop(peer_id, None)
-                await stream_manager.notify_provider_viewer_left(stream, peer_id)
-            logger.info(f"[SIGNAL] Viewer {peer_id} disconnected from stream {stream_id}")
-
-
 # ==================== Stream Input (AI frames from camera provider) ====================
 
 
@@ -596,6 +481,8 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
 
     logger.info(f"[WS IN] Camera provider connected for AI frames on stream {stream_id}")
     stream.status = "active"
+    # Start the AI inference loop now that a provider is feeding frames
+    stream_manager.ensure_ai_task(stream)
 
     def _decode_frame(b64_img: str):
         """Decode base64 JPEG → cv2 frame (runs in thread pool)."""

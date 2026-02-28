@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Camera, Monitor, Globe, X } from "lucide-react";
 import { getBaseUrl } from "@/lib/config";
 import { useAuth } from "@/context/AuthContext";
+import { createVideoSDKRoom } from "@/lib/videosdk";
 
 interface StreamDialogProps {
     isOpen: boolean;
@@ -66,6 +67,20 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
             }
 
             const uid = user.uid;
+            // For client_cam streams, create a VideoSDK room first
+            let roomId = "";
+            if (streamType === "client_cam") {
+                try {
+                    roomId = await createVideoSDKRoom();
+                    console.log("[StreamDialog] Created VideoSDK room:", roomId);
+                } catch (err) {
+                    console.error("Failed to create VideoSDK room:", err);
+                    alert("Failed to create video room. Please try again.");
+                    setLoading(false);
+                    return;
+                }
+            }
+
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 10000);
             const res = await fetch(`${getBaseUrl()}/api/streams`, {
@@ -77,7 +92,8 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                     source,
                     uid,
                     model_id: "latest",
-                    device_id: deviceId
+                    device_id: deviceId,
+                    room_id: roomId,
                 }),
                 signal: controller.signal,
             });
