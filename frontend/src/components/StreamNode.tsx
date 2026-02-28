@@ -4,7 +4,6 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Trash2, Volume2, VolumeX, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
-import type Peer from "peerjs";
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -16,6 +15,14 @@ interface StreamNodeProps {
     onSelect?: () => void;
     isPrimary?: boolean;
 }
+
+const ICE_SERVERS = {
+    iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun2.l.google.com:19302" },
+    ]
+};
 
 /* ================================================================== */
 /*  STREAM NODE                                                        */
@@ -30,15 +37,13 @@ export default function StreamNode({
     const videoRef = useRef<HTMLVideoElement>(null);
     const overlayRef = useRef<HTMLCanvasElement>(null);
 
-    // Keep track of the remote MediaStream for viewers
-    const remoteStreamRef = useRef<MediaStream>(new MediaStream());
     // Keep track of the local media stream for providers (for cleanup)
     const localStreamRef = useRef<MediaStream | null>(null);
 
-    // PeerJS references
-    const peerRef = useRef<Peer | null>(null);
-    const callsRef = useRef<any[]>([]); // Keep track of active calls (for provider)
-
+    // WebRTC connection refs
+    const peerConnections = useRef<{ [viewerId: string]: RTCPeerConnection }>({});
+    const pcRef = useRef<RTCPeerConnection | null>(null);
+    
     const aiWsRef = useRef<WebSocket | null>(null);
 
     const [isStreaming, setIsStreaming] = useState(false);
@@ -48,15 +53,17 @@ export default function StreamNode({
     const [netState, setNetState] = useState<string>("init");
 
     // Determine device identity
-    const [localDeviceId, setLocalDeviceId] = useState("");
-    useEffect(() => {
-        let id = localStorage.getItem("device_id");
-        if (!id) {
-            id = Math.random().toString(36).substring(2, 15);
-            localStorage.setItem("device_id", id);
+    const [localDeviceId] = useState(() => {
+        if (typeof window !== 'undefined') {
+            let id = localStorage.getItem("device_id");
+            if (!id) {
+                id = Math.random().toString(36).substring(2, 15);
+                localStorage.setItem("device_id", id);
+            }
+            return id;
         }
-        setLocalDeviceId(id);
-    }, []);
+        return "";
+    });
 
     const isOwner = stream.type === "client_cam" && stream.device_id === localDeviceId;
     const isClientCam = stream.type === "client_cam";
@@ -155,24 +162,18 @@ export default function StreamNode({
     }, [stream.id, drawDetections, onDetections]);
 
     /* ------------------------------------------------------------------ */
-    /*  Attach remoteStreamRef to video element once it mounts             */
-    /* ------------------------------------------------------------------ */
-    useEffect(() => {
-        if (videoRef.current && remoteStreamRef.current) {
-            videoRef.current.srcObject = remoteStreamRef.current;
-        }
-    });
-
-    /* ------------------------------------------------------------------ */
-    /*  PeerJS connection for client_cam streams                           */
+    /*  WebRTC connection for client_cam streams                           */
     /* ------------------------------------------------------------------ */
     useEffect(() => {
         if (!isClientCam || !localDeviceId) return;
 
         let active = true;
         let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-        const providerId = `provider-${stream.id}`;
-
+        const wsUrl = getWsUrl();
+        const peerId = isOwner ? localDeviceId : Math.random().toString(36).substring(2, 15);
+        
+        let signalWs: WebSocket | null = null;
+        
         const cleanup = () => {
             active = false;
             if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -187,20 +188,21 @@ export default function StreamNode({
                 localStreamRef.current = null;
             }
 
-            if (callsRef.current) {
-                callsRef.current.forEach(c => c.close());
-                callsRef.current = [];
+            Object.values(peerConnections.current).forEach(pc => pc.close());
+            peerConnections.current = {};
+            
+            if (pcRef.current) {
+                pcRef.current.close();
+                pcRef.current = null;
             }
-
-            if (peerRef.current) {
-                peerRef.current.destroy();
-                peerRef.current = null;
+            
+            if (signalWs) {
+                signalWs.close();
+                signalWs = null;
             }
         };
 
-        const initPeerJS = async () => {
-            // Import dynamically since PeerJS uses browser APIs natively
-            const { default: Peer } = await import("peerjs");
+        const initWebRTC = async () => {
             if (!active) return;
 
             if (isOwner) {
@@ -221,58 +223,53 @@ export default function StreamNode({
                         setVideoLoaded(true);
                     }
                     setIsStreaming(true);
-                    setNetState("connecting_peerjs");
+                    setNetState("broadcasting");
 
-                    // Create deterministic Peer ID for provider
-                    const peer = new Peer(providerId, {
-                        debug: 2,
-                        // Config can include custom STUN/TURN if needed, but default is usually fine
-                    });
-                    peerRef.current = peer;
+                    signalWs = new WebSocket(`${wsUrl}/ws/signaling/${stream.id}/provider/${peerId}`);
+                    
+                    signalWs.onmessage = async (event) => {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === "viewer_joined") {
+                            const viewerId = msg.peer_id;
+                            const pc = new RTCPeerConnection(ICE_SERVERS);
+                            peerConnections.current[viewerId] = pc;
+                            
+                            localStreamRef.current?.getTracks().forEach(track => pc.addTrack(track, localStreamRef.current!));
+                            
+                            pc.onicecandidate = (e) => {
+                                if (e.candidate && signalWs?.readyState === WebSocket.OPEN) {
+                                    signalWs.send(JSON.stringify({ type: "ice_candidate", to: viewerId, candidate: e.candidate }));
+                                }
+                            };
 
-                    peer.on("open", (id) => {
-                        console.log("[Provider] PeerJS open with ID:", id);
-                        setNetState("broadcasting");
-                    });
-
-                    // When a viewer calls, answer with our camera stream
-                    peer.on("call", (call) => {
-                        console.log("[Provider] Receiving call from:", call.peer);
-                        call.answer(streamObj);
-                        callsRef.current.push(call);
-
-                        call.on("close", () => {
-                            callsRef.current = callsRef.current.filter(c => c !== call);
-                        });
-                    });
-
-                    peer.on("error", (err) => {
-                        console.error("[Provider] PeerJS error:", err);
-                        if (err.type === "unavailable-id") {
-                            console.error("ID is taken. Probably another tab is broadcasting this stream?");
-                            setNetState("error_duplicate_provider");
-                        } else {
-                            // Try resetting if network drops
-                            if (active) {
-                                setNetState("reconnecting");
-                                setTimeout(() => {
-                                    if (active && peerRef.current) {
-                                        peerRef.current.reconnect();
-                                    }
-                                }, 3000);
+                            const offer = await pc.createOffer();
+                            await pc.setLocalDescription(offer);
+                            if (signalWs?.readyState === WebSocket.OPEN) {
+                                signalWs.send(JSON.stringify({ type: "offer", to: viewerId, offer }));
+                            }
+                        } else if (msg.type === "answer") {
+                            const pc = peerConnections.current[msg.from];
+                            if (pc) await pc.setRemoteDescription(msg.answer);
+                        } else if (msg.type === "ice_candidate") {
+                            const pc = peerConnections.current[msg.from];
+                            if (pc) await pc.addIceCandidate(msg.candidate).catch(e => console.warn("ICE error", e));
+                        } else if (msg.type === "viewer_left") {
+                            const pc = peerConnections.current[msg.peer_id];
+                            if (pc) {
+                                pc.close();
+                                delete peerConnections.current[msg.peer_id];
                             }
                         }
-                    });
-
-                    peer.on("disconnected", () => {
-                        if (active && peerRef.current && !peerRef.current.destroyed) {
-                            console.log("[Provider] Disconnected from server, reconnecting...");
-                            peerRef.current.reconnect();
+                    };
+                    
+                    signalWs.onclose = () => {
+                        if (active) {
+                            setNetState("reconnecting");
+                            reconnectTimer = setTimeout(initWebRTC, 3000);
                         }
-                    });
+                    };
 
                     // Start AI capture loop
-                    const wsUrl = getWsUrl();
                     const aiWs = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
                     aiWsRef.current = aiWs;
                     let sending = false;
@@ -326,84 +323,72 @@ export default function StreamNode({
 
             } else {
                 /* =================== VIEWER PATH =================== */
-                setNetState("connecting_peerjs");
-                const peer = new Peer({ debug: 2 });
-                peerRef.current = peer;
+                setNetState("connecting_signaling");
+                signalWs = new WebSocket(`${wsUrl}/ws/signaling/${stream.id}/viewer/${peerId}`);
+                
+                signalWs.onopen = () => {
+                    setNetState("waiting_for_camera");
+                };
 
-                peer.on("open", (id) => {
-                    console.log("[Viewer] PeerJS open, my id:", id);
-                    setNetState("calling_provider");
-
-                    // Viewer initiates call with a dummy stream to satisfy some WebRTC requirements
-                    const canvas = document.createElement("canvas");
-                    canvas.width = 1; canvas.height = 1;
-                    const dummyStream = canvas.captureStream(0);
-
-                    const call = peer.call(providerId, dummyStream);
-                    callsRef.current = [call];
-
-                    call.on("stream", (remoteStream) => {
-                        console.log("[Viewer] Received remote stream:", remoteStream.getTracks());
-                        remoteStreamRef.current = remoteStream;
-                        if (videoRef.current) {
-                            videoRef.current.srcObject = remoteStream;
-                            videoRef.current.play().catch(() => setShowPlayButton(true));
-                            setVideoLoaded(true);
-                            setIsStreaming(true);
-                        }
+                signalWs.onmessage = async (event) => {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === "offer") {
                         setNetState("streaming");
-                    });
+                        const pc = new RTCPeerConnection(ICE_SERVERS);
+                        pcRef.current = pc;
+                        
+                        pc.onicecandidate = (e) => {
+                            if (e.candidate && signalWs?.readyState === WebSocket.OPEN) {
+                                signalWs.send(JSON.stringify({ type: "ice_candidate", candidate: e.candidate }));
+                            }
+                        };
+                        
+                        pc.ontrack = (e) => {
+                            if (videoRef.current) {
+                                videoRef.current.srcObject = e.streams[0];
+                                videoRef.current.play().catch(() => setShowPlayButton(true));
+                                setVideoLoaded(true);
+                                setIsStreaming(true);
+                            }
+                        };
 
-                    call.on("close", () => {
-                        console.log("[Viewer] Call closed");
+                        pc.onconnectionstatechange = () => {
+                            if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+                                setVideoLoaded(false);
+                                setIsStreaming(false);
+                                setNetState("reconnecting");
+                                if (active) {
+                                    pc.close();
+                                    signalWs?.close(); // trigger reconnect
+                                }
+                            }
+                        };
+
+                        await pc.setRemoteDescription(msg.offer);
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        if (signalWs?.readyState === WebSocket.OPEN) {
+                            signalWs.send(JSON.stringify({ type: "answer", answer }));
+                        }
+                    } else if (msg.type === "ice_candidate") {
+                        if (pcRef.current) {
+                            await pcRef.current.addIceCandidate(msg.candidate).catch(e => console.warn("ICE err", e));
+                        }
+                    }
+                };
+                
+                signalWs.onclose = () => {
+                    if (active) {
                         setVideoLoaded(false);
                         setIsStreaming(false);
-                        if (active) {
-                            setNetState("reconnecting");
-                            reconnectTimer = setTimeout(initPeerJS, 3000); // Retry from scratch
-                        }
-                    });
-
-                    call.on("error", (err) => {
-                        console.error("[Viewer] Call error:", err);
-                    });
-                });
-
-                peer.on("error", (err) => {
-                    console.error("[Viewer] PeerJS error:", err);
-                    if (err.type === "peer-unavailable") {
-                        console.warn("[Viewer] Provider not online yet. Retrying in 5s...");
-                        setNetState("waiting_for_camera");
-                        if (active) {
-                            reconnectTimer = setTimeout(() => {
-                                if (peerRef.current && !peerRef.current.destroyed) {
-                                    peerRef.current.destroy();
-                                }
-                                initPeerJS();
-                            }, 5000);
-                        }
-                    } else if (active) {
                         setNetState("reconnecting");
-                        reconnectTimer = setTimeout(() => {
-                            if (peerRef.current && !peerRef.current.destroyed) {
-                                peerRef.current.destroy();
-                            }
-                            initPeerJS();
-                        }, 3000);
+                        reconnectTimer = setTimeout(initWebRTC, 3000);
                     }
-                });
-
-                peer.on("disconnected", () => {
-                    if (active && peerRef.current && !peerRef.current.destroyed) {
-                        console.log("[Viewer] Disconnected from server, reconnecting...");
-                        peerRef.current.reconnect();
-                    }
-                });
+                };
             }
         };
 
-        // Try importing dynamically immediately
-        initPeerJS();
+        initWebRTC();
 
         return cleanup;
     }, [isClientCam, isOwner, localDeviceId, stream.id]);
@@ -427,10 +412,8 @@ export default function StreamNode({
             if (localStreamRef.current) {
                 localStreamRef.current.getTracks().forEach((t) => t.stop());
             }
-            if (callsRef.current) {
-                callsRef.current.forEach(c => c.close());
-            }
-            if (peerRef.current) peerRef.current.destroy();
+            Object.values(peerConnections.current).forEach(pc => pc.close());
+            if (pcRef.current) pcRef.current.close();
             if (aiWsRef.current) aiWsRef.current.close();
             onDelete(stream.id, true);
         }
@@ -509,7 +492,7 @@ export default function StreamNode({
             <div className="absolute bottom-4 right-4 border-r-[2px] border-b-[2px] border-[var(--color-silica)] w-8 h-8 z-30 pointer-events-none opacity-50" />
 
             {/* Header bar */}
-            <div className={`p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent ${!isPrimary && "bg-black border-b-[2px] border-[var(--color-iron)]"} absolute top-0 left-0 w-full`}>
+            <div className={`p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent ${!isPrimary ? "bg-black border-b-[2px] border-[var(--color-iron)]" : ""} absolute top-0 left-0 w-full`}>
                 <span className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] truncate max-w-[150px]`}>
                     {stream.name} [{stream.type.toUpperCase()}]
                 </span>
@@ -607,4 +590,3 @@ export default function StreamNode({
         </motion.div>
     );
 }
-

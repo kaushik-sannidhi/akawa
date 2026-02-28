@@ -36,6 +36,10 @@ class Stream:
         # Legacy viewer WS for fallback frame broadcast (server_cam / rtsp only)
         self.fallback_wss: Set[WebSocket] = set()
 
+        # WebRTC Signaling
+        self.provider_signal_ws: Optional[WebSocket] = None
+        self.viewer_signal_wss: Dict[str, WebSocket] = {}
+
         self._running = False
         self._ai_task = None
         self._capture_task = None

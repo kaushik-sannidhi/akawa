@@ -458,6 +458,53 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
 # ==================== WebRTC Signaling Endpoint ====================
 
 
+@app.websocket("/ws/signaling/{stream_id}/{role}/{peer_id}")
+async def websocket_signaling(websocket: WebSocket, stream_id: str, role: str, peer_id: str):
+    await websocket.accept()
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        await websocket.close(code=1008)
+        return
+
+    if role == "provider":
+        stream.provider_signal_ws = websocket
+        try:
+            while stream._running:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                target_viewer = msg.get("to")
+                if target_viewer:
+                    await stream_manager.relay_signal_to_viewer(stream, target_viewer, msg)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error(f"Signaling provider error: {e}")
+        finally:
+            if stream.provider_signal_ws == websocket:
+                stream.provider_signal_ws = None
+
+    elif role == "viewer":
+        stream.viewer_signal_wss[peer_id] = websocket
+        await stream_manager.relay_signal_to_provider(stream, {
+            "type": "viewer_joined",
+            "peer_id": peer_id
+        })
+        try:
+            while stream._running:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                msg["from"] = peer_id
+                await stream_manager.relay_signal_to_provider(stream, msg)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error(f"Signaling viewer error: {e}")
+        finally:
+            stream.viewer_signal_wss.pop(peer_id, None)
+            await stream_manager.relay_signal_to_provider(stream, {
+                "type": "viewer_left",
+                "peer_id": peer_id
+            })
 
 
 # ==================== Stream Input (AI frames from camera provider) ====================
