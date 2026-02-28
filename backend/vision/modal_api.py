@@ -77,7 +77,7 @@ class Qwen2VLResponse(BaseModel):
     image=qwen2_vl_image, 
     gpu="A100", 
     volumes={QWEN2_VL_MODEL_DIR: qwen2_vl_volume}, 
-    keep_warm=1,
+    min_containers=1,
     timeout=300
 )
 class Qwen2VLModel:
@@ -178,3 +178,189 @@ class Qwen2VLModel:
                     os.remove(temp_video_path)
                 except Exception:
                     pass
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENDPOINT — Fast Vision (Weapon + Violence Detection on T4 GPU)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+fast_vision_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("libgl1", "libglib2.0-0")
+    .pip_install(
+        "tensorflow[and-cuda]",
+        "ultralytics",
+        "opencv-python-headless",
+        "fastapi[standard]",
+        "pydantic",
+        "pillow",
+        "numpy",
+        "torch>=2.0.0" # ultralytics needs torch
+    )
+    .add_local_dir(
+        "akawa/backend/vision/models",
+        remote_path="/root/models"
+    )
+)
+
+class FastVisionRequest(BaseModel):
+    video_b64: str
+
+class FastVisionResponse(BaseModel):
+    weapons_detected: bool
+    weapon_confidence: float
+    violence_detected: bool
+    violence_confidence: float
+    error: Optional[str] = None
+
+@app.cls(
+    image=fast_vision_image,
+    gpu="A100", # T4 or L4 is enough for YOLO + TwoStream
+    min_containers=1,
+    timeout=300
+)
+class FastVisionAPI:
+    """
+    Fast Vision API that quickly identifies weapons (YOLO) and brawling/violence (Two-Stream).
+    Runs on 1x T4 GPU constantly warm.
+    """
+
+    @modal.enter()
+    def load_models(self):
+        import tensorflow as tf
+        import torch
+        from ultralytics import YOLO
+        import ultralytics.nn.tasks
+        import os
+        
+        print("Loading Fast Vision Models...")
+        
+        # Patch for PyTorch 2.6 weights_only=True default breaking Ultralytics loads
+        try:
+            torch.serialization.add_safe_globals([ultralytics.nn.tasks.DetectionModel])
+        except AttributeError:
+            pass # Older PyTorch versions don't need this
+        
+        # Load YOLO Weapon model
+        self.weapon_model = YOLO('/root/models/weapon.pt')
+        
+        # Load Two-Stream Violence model
+        self.brawl_model = tf.keras.models.load_model('/root/models/brawl_model.keras')
+        
+        print("Fast Vision Models loaded successfully.")
+
+    @modal.fastapi_endpoint(method="POST", docs=True)
+    def analyze(self, req: FastVisionRequest) -> FastVisionResponse:
+        import base64
+        import cv2
+        import numpy as np
+        import tempfile
+        import os
+        import traceback
+
+        temp_video_path = None
+        try:
+            # Decode the base64 video
+            video_bytes = base64.b64decode(req.video_b64)
+            
+            # Write to a temporary file
+            fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
+            with os.fdopen(fd, 'wb') as f:
+                f.write(video_bytes)
+
+            cap = cv2.VideoCapture(temp_video_path)
+            
+            # Configuration
+            SEQ_LEN = 20
+            IMG_SIZE = (84, 84)
+            
+            frame_buffer = []
+            prev_gray = None
+            
+            brawl_confidences = []
+            weapon_confidences = []
+            
+            def compute_optical_flow(prev, curr):
+                flow = cv2.calcOpticalFlowFarneback(
+                    prev, curr, None, 
+                    pyr_scale=0.5, levels=3, winsize=15, 
+                    iterations=5, poly_n=5, poly_sigma=1.1, flags=0
+                )
+                return flow
+            
+            frame_count = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                    
+                frame_count += 1
+                
+                # --- 1. Weapon Detection (YOLO) ---
+                # Run weapon detection on every 5th frame to save compute
+                if frame_count % 5 == 0:
+                    results = self.weapon_model(frame, verbose=False)
+                    for r in results:
+                        # Check confidence of detections
+                        if len(r.boxes.conf) > 0:
+                            max_conf = float(r.boxes.conf.max().cpu().numpy())
+                            weapon_confidences.append(max_conf)
+                
+                # --- 2. Violence Detection (Two-Stream) ---
+                resized_frame = cv2.resize(frame, IMG_SIZE)
+                rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+                
+                if prev_gray is None:
+                    flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+                else:
+                    flow = compute_optical_flow(prev_gray, gray)
+                    flow = np.clip(flow / 20.0, -1.0, 1.0)
+                    
+                prev_gray = gray
+                
+                stacked_5c = np.concatenate([rgb, flow], axis=-1)
+                frame_buffer.append(stacked_5c)
+                
+                # Keep sliding window of size SEQ_LEN
+                if len(frame_buffer) > SEQ_LEN:
+                    frame_buffer.pop(0)
+                
+                if len(frame_buffer) == SEQ_LEN:
+                    sequence = np.array(frame_buffer, dtype=np.float32)
+                    sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
+                    prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
+                    brawl_confidences.append(prob)
+
+            cap.release()
+            
+            # Aggregation logic
+            max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
+            weapons_detected = max_weapon_conf > 0.5 # Threshold for weapon
+            
+            max_brawl_conf = max(brawl_confidences) if brawl_confidences else 0.0
+            violence_detected = max_brawl_conf > 0.6 # Threshold from test script
+
+            return FastVisionResponse(
+                weapons_detected=weapons_detected,
+                weapon_confidence=max_weapon_conf,
+                violence_detected=violence_detected,
+                violence_confidence=max_brawl_conf
+            )
+
+        except Exception as e:
+            traceback.print_exc()
+            return FastVisionResponse(
+                weapons_detected=False,
+                weapon_confidence=0.0,
+                violence_detected=False,
+                violence_confidence=0.0,
+                error=str(e)
+            )
+            
+        finally:
+            if temp_video_path and os.path.exists(temp_video_path):
+                try:
+                    os.remove(temp_video_path)
+                except Exception:
+                    pass
+

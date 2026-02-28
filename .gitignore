@@ -5,3 +5,6 @@ design-system
 runs
 __pycache__/
 *.pyc
+*.pt
+*.keras
+*.h5
