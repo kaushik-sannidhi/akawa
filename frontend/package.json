@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@cloudflare/realtimekit": "^1.2.4",
+    "@cloudflare/realtimekit-react": "^1.2.4",
     "@cloudflare/realtimekit-react-ui": "^1.1.0",
     "@google/generative-ai": "^0.24.1",
     "@types/nodemailer": "^7.0.11",

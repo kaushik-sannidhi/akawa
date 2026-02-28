@@ -227,7 +227,7 @@ class StreamManager:
                         "timestamp": int(time.time() * 1000),
                     }
                     self._broadcast_text(stream, json.dumps(payload))
-                await asyncio.sleep(0.1)  # ~10 FPS
+                await asyncio.sleep(0.2)  # ~5 FPS — lower bandwidth
             except Exception as e:
                 logger.error(f"Viewer broadcast error: {e}")
                 await asyncio.sleep(0.5)

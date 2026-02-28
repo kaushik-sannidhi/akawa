@@ -6,10 +6,13 @@
  * All WebRTC, TURN, ICE, reconnection, etc. is handled by the SDK.
  */
 
-import { CloudflareRealtimeKit } from "@cloudflare/realtimekit";
+import CloudflareRealtimeKit from "@cloudflare/realtimekit";
+import type { RTKSelf, RTKParticipant } from "@cloudflare/realtimekit";
 import { getBaseUrl } from "@/lib/config";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// Re-export types the rest of the app needs
+export type { RTKSelf, RTKParticipant };
+export type RTKClient = CloudflareRealtimeKit;
 
 export interface RealtimeSession {
   meeting: CloudflareRealtimeKit;
@@ -17,15 +20,9 @@ export interface RealtimeSession {
   stop: () => Promise<void>;
 }
 
-// ─── Join a meeting (works for both publishers and viewers) ──────────────────
-
 /**
- * Request an auth token from the backend and initialize the Realtime Kit SDK.
- * The SDK automatically handles:
- *   - WebRTC connection with Cloudflare's global SFU
- *   - TURN/ICE for NAT traversal across networks
- *   - Automatic reconnection
- *   - Audio + Video tracks
+ * Request an auth token from the backend and initialise the Realtime Kit SDK.
+ * Works for both publishers and viewers — the SDK handles everything.
  */
 export async function joinMeeting(
   streamId: string,
@@ -67,21 +64,4 @@ export async function joinMeeting(
       }
     },
   };
-}
-
-/**
- * Enable the local camera + mic and start publishing to the meeting.
- * Call this after joinMeeting() for the camera owner.
- */
-export async function enableLocalMedia(meeting: CloudflareRealtimeKit): Promise<void> {
-  await meeting.self.enableVideo();
-  await meeting.self.enableAudio();
-}
-
-/**
- * Disable local media (stop publishing).
- */
-export async function disableLocalMedia(meeting: CloudflareRealtimeKit): Promise<void> {
-  await meeting.self.disableVideo();
-  await meeting.self.disableAudio();
 }

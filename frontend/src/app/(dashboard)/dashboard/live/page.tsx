@@ -162,6 +162,8 @@ export default function LiveStreamPage() {
         return 0;
     });
 
+    const hasPrimary = primaryStreamId && streams.some(s => s.id === primaryStreamId);
+
     return (
         <div className="flex flex-col lg:flex-row gap-3 lg:gap-6 h-[calc(100dvh-6rem)] sm:h-[calc(100dvh-8rem)] font-mono uppercase tracking-widest text-[#FFF]">
 
@@ -177,7 +179,6 @@ export default function LiveStreamPage() {
                     </div>
 
                     <div className="flex items-center gap-2 sm:gap-4">
-                        {/* Mobile alerts toggle */}
                         <button
                             onClick={() => setAlertsPanelOpen(!alertsPanelOpen)}
                             className="relative lg:hidden p-2 border border-[var(--color-iron)] hover:border-white text-[var(--color-silica)] transition-colors"
@@ -190,11 +191,9 @@ export default function LiveStreamPage() {
                                 </span>
                             )}
                         </button>
-
                         <button onClick={() => fetchStreams()} className="p-2 border border-[var(--color-iron)] hover:border-white text-[var(--color-silica)] transition-colors" title="Refresh Feed">
                             <RefreshCw className="w-4 h-4" />
                         </button>
-
                         <button onClick={() => setIsDialogOpen(true)} className="px-3 sm:px-6 py-2 border-[2px] border-[var(--color-data)] font-bold text-[10px] text-black bg-[var(--color-data)] hover:bg-white transition-none shadow-[4px_4px_0_var(--color-data)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-data)] flex items-center gap-2">
                             <PlusSquare className="w-3 h-3" />
                             <span className="hidden sm:inline">[ DEPLOY_SENSOR ]</span>
@@ -203,11 +202,13 @@ export default function LiveStreamPage() {
                     </div>
                 </div>
 
+                {/* ── Stream Grid ── */}
                 {orderedStreams.length === 0 ? (
                     <div className="flex-1 relative bg-black flex flex-col items-center justify-center overflow-hidden border-[2px] border-[var(--color-iron)] min-h-[200px]">
                         <span className="font-bold text-[var(--color-silica)] text-xs sm:text-sm tracking-widest border border-current px-4 py-2">[ GRID_OFFLINE ]</span>
                     </div>
                 ) : orderedStreams.length === 1 ? (
+                    /* Single stream — full size */
                     <div className="flex-1 border-[2px] border-[var(--color-iron)] bg-black relative overflow-hidden flex flex-col min-h-[240px]">
                         <StreamNode
                             key={orderedStreams[0].id}
@@ -215,39 +216,56 @@ export default function LiveStreamPage() {
                             onDelete={handleDeleteStream}
                             onDetections={handleDetections}
                             onSelect={() => setPrimaryStreamId(orderedStreams[0].id)}
-                            isPrimary={false} // Full width height, no need for span classes
+                            onDoubleClick={() => setPrimaryStreamId(null)}
+                            isPrimary={false}
                         />
                     </div>
-                ) : orderedStreams.length === 2 ? (
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-y-auto auto-rows-[minmax(240px,_1fr)] min-h-[240px]">
-                        {orderedStreams.map((s) => (
+                ) : hasPrimary ? (
+                    /* Primary + sidebar thumbnails */
+                    <div className="flex-1 flex flex-col sm:flex-row gap-[2px] border-[2px] border-[var(--color-iron)] bg-[var(--color-iron)] min-h-[240px] overflow-hidden">
+                        {/* Primary — takes ~75% */}
+                        <div className="flex-[3] min-h-[200px] sm:min-h-0 relative">
                             <StreamNode
-                                key={s.id}
-                                stream={s}
+                                key={orderedStreams[0].id}
+                                stream={orderedStreams[0]}
                                 onDelete={handleDeleteStream}
                                 onDetections={handleDetections}
-                                onSelect={() => setPrimaryStreamId(s.id)}
-                                isPrimary={false}
+                                onSelect={() => {}}
+                                onDoubleClick={() => setPrimaryStreamId(null)}
+                                isPrimary={true}
                             />
-                        ))}
+                        </div>
+                        {/* Sidebar thumbnails — takes ~25% */}
+                        <div className="flex-1 flex sm:flex-col gap-[2px] overflow-auto min-w-0 sm:min-w-[180px] sm:max-w-[280px]">
+                            {orderedStreams.slice(1).map(s => (
+                                <div key={s.id} className="flex-1 min-h-[120px] sm:min-h-[140px] relative">
+                                    <StreamNode
+                                        stream={s}
+                                        onDelete={handleDeleteStream}
+                                        onDetections={handleDetections}
+                                        onSelect={() => setPrimaryStreamId(s.id)}
+                                        onDoubleClick={() => setPrimaryStreamId(null)}
+                                        isPrimary={false}
+                                    />
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 ) : (
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-y-auto auto-rows-[minmax(240px,_1fr)] min-h-[240px]">
-                        <StreamNode
-                            key={orderedStreams[0].id}
-                            stream={orderedStreams[0]}
-                            onDelete={handleDeleteStream}
-                            onDetections={handleDetections}
-                            onSelect={() => setPrimaryStreamId(orderedStreams[0].id)}
-                            isPrimary={true}
-                        />
-                        {orderedStreams.slice(1).map(s => (
+                    /* Even grid — no primary selected */
+                    <div className={`flex-1 grid gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-y-auto min-h-[240px] ${
+                        orderedStreams.length === 2 ? "grid-cols-1 sm:grid-cols-2" :
+                        orderedStreams.length <= 4 ? "grid-cols-2" :
+                        "grid-cols-2 lg:grid-cols-3"
+                    } auto-rows-[minmax(200px,_1fr)]`}>
+                        {orderedStreams.map(s => (
                             <StreamNode
                                 key={s.id}
                                 stream={s}
                                 onDelete={handleDeleteStream}
                                 onDetections={handleDetections}
                                 onSelect={() => setPrimaryStreamId(s.id)}
+                                onDoubleClick={() => setPrimaryStreamId(null)}
                                 isPrimary={false}
                             />
                         ))}
