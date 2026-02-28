@@ -57,7 +57,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
                 <div className="px-6 py-4 border-b-[2px] border-[var(--color-iron)] flex items-center gap-2 relative z-10">
                     <div className="w-3 h-3 bg-[var(--color-alert)] animate-[pulse_2s_ease-in-out_infinite]" />
-                    <span className="font-mono font-bold text-xl text-[var(--color-data)]">AEGIS_OS</span>
+                    <span className="font-mono font-bold text-xl text-[var(--color-data)]">AKAWA_OS</span>
                 </div>
 
                 <div className="px-6 py-2 border-b-[2px] border-[var(--color-iron)] font-mono text-[10px] text-[var(--color-silica)] bg-[var(--color-dim)] relative z-10 flex flex-col">

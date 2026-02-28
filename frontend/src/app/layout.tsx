@@ -9,7 +9,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AEGIS // CORE_SYSTEM",
+  title: "AKAWA // CORE_SYSTEM",
   description: "AUTONOMOUS THREAT DETECTION GRID",
 };
 

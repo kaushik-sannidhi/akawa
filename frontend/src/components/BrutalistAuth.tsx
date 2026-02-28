@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 export function BrutalistAuth({ initialView = "login" }: { initialView?: "login" | "signup" }) {
     const [view, setView] = useState<"login" | "signup">(initialView);
-    const [email, setEmail] = useState("admin@aegis.os");
+    const [email, setEmail] = useState("admin@akawa.os");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
@@ -84,7 +84,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
 
                 <Link href="/" className="font-mono font-bold text-2xl text-[var(--color-data)] flex items-center gap-2 relative z-10 w-fit cursor-crosshair">
                     <div className="w-4 h-4 bg-[var(--color-alert)] animate-pulse" />
-                    AEGIS_OS
+                    AKAWA_OS
                 </Link>
 
                 <div className="relative z-10 mb-24">
@@ -163,7 +163,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                         value={email}
                                         onChange={(e) => setEmail(e.target.value)}
                                         className="w-full bg-[var(--color-dim)] border-[2px] border-[var(--color-iron)] p-3 text-white font-mono text-sm focus:border-[var(--color-data)] focus:outline-none transition-colors rounded-none placeholder:text-[var(--color-iron)]"
-                                        placeholder="admin@aegis.os"
+                                        placeholder="admin@akawa.os"
                                     />
                                 </div>
                                 <div className="space-y-2">

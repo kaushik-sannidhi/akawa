@@ -11,7 +11,7 @@ type SettingsContextType = {
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
 
-const STORAGE_KEY = "aegis_settings";
+const STORAGE_KEY = "akawa_settings";
 
 function loadSettings() {
     if (typeof window === "undefined") return { confidenceThreshold: 0.65, selectedModel: "latest" };

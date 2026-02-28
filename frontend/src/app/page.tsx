@@ -161,7 +161,7 @@ const USThreatMap = () => {
             </div>
 
             <div className="flex justify-between w-full font-mono text-[10px] text-[var(--color-iron)] border-t-[2px] border-[var(--color-iron)] pt-2 mt-8 px-8 lg:px-0 font-bold">
-                <span>TOPOLOGY: AEGIS_US_MAINNET</span>
+                <span>TOPOLOGY: AKAWA_US_MAINNET</span>
                 <span>LATENCY_SIG: &lt;4ms</span>
             </div>
         </div>
@@ -336,7 +336,7 @@ export default function LandingPage() {
                 <div className="flex items-center gap-8 relative z-10">
                     <div className="font-mono font-bold text-xl text-[var(--color-data)] flex items-center gap-2">
                         <div className="w-3 h-3 bg-[var(--color-alert)] animate-[pulse_1s_ease-in-out_infinite]" />
-                        <span className="font-mono">AEGIS_OS</span>
+                        <span className="font-mono">AKAWA_OS</span>
                     </div>
                     <nav className="hidden md:flex gap-6 font-mono text-[10px] text-[var(--color-silica)]">
                         <span className="hover:text-[var(--color-data)] hover:bg-[var(--color-data)] hover:text-black px-1 transition-none cursor-crosshair">SYS_STATUS: ONLINE</span>
@@ -823,7 +823,7 @@ export default function LandingPage() {
             </main>
 
             <footer className="py-2 px-8 flex justify-between items-center font-mono text-[10px] text-[var(--color-silica)] bg-[var(--color-void)] border-t-[2px] border-[var(--color-iron)] mt-auto relative z-10 font-bold bg-[#000]">
-                <span>EOF. © {new Date().getFullYear()} AIWEAPON_DEV // ALL PROTOCOLS RESERVED</span>
+                <span>EOF. © {new Date().getFullYear()} AKAWA_DEV // ALL PROTOCOLS RESERVED</span>
                 <span className="hidden sm:inline-block bg-[var(--color-iron)] text-white px-1">RENDER_ID: {renderId}</span>
             </footer>
         </div>

@@ -458,18 +458,12 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         const pc = new RTCPeerConnection(ICE_SERVERS);
                         peerConnectionsRef.current.set("provider", pc);
 
-                        // When we receive remote tracks (audio + video)
+                        // When we receive the remote video track
                         pc.ontrack = (e) => {
                             console.log("[WebRTC Viewer] Got remote track", e.track.kind);
-                            if (!remoteVideoRef.current || !e.streams[0]) return;
-
-                            // Only assign srcObject once (both tracks share the same stream)
-                            if (remoteVideoRef.current.srcObject !== e.streams[0]) {
+                            if (remoteVideoRef.current && e.streams[0]) {
                                 remoteVideoRef.current.srcObject = e.streams[0];
-                            }
-
-                            // Kick playback only when the video track arrives
-                            if (e.track.kind === "video") {
+                                // Ensure muted for autoplay (mobile requires this)
                                 remoteVideoRef.current.muted = true;
                                 safePlay(remoteVideoRef.current);
                                 setVideoLoaded(true);
