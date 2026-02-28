@@ -4,6 +4,38 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Trash2, Volume2, VolumeX, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
+import Peer from "peerjs";
+
+/* ------------------------------------------------------------------ */
+/*  ICE servers: Google STUN + Metered.ca TURN                         */
+/* ------------------------------------------------------------------ */
+const ICE_CONFIG: RTCConfiguration = {
+    iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" },
+        { urls: "stun:stun.relay.metered.ca:80" },
+        {
+            urls: "turn:standard.relay.metered.ca:80",
+            username: "3f0bc0c30c289811fa744d56",
+            credential: "5TUFbNzRr++6+B9x",
+        },
+        {
+            urls: "turn:standard.relay.metered.ca:80?transport=tcp",
+            username: "3f0bc0c30c289811fa744d56",
+            credential: "5TUFbNzRr++6+B9x",
+        },
+        {
+            urls: "turn:standard.relay.metered.ca:443",
+            username: "3f0bc0c30c289811fa744d56",
+            credential: "5TUFbNzRr++6+B9x",
+        },
+        {
+            urls: "turns:standard.relay.metered.ca:443?transport=tcp",
+            username: "3f0bc0c30c289811fa744d56",
+            credential: "5TUFbNzRr++6+B9x",
+        },
+    ],
+};
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -30,9 +62,10 @@ export default function StreamNode({
     const imgRef = useRef<HTMLImageElement>(null);
     const overlayRef = useRef<HTMLCanvasElement>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
+    const peerRef = useRef<Peer | null>(null);
     const providerWsRef = useRef<WebSocket | null>(null);
 
-    // Stable refs to avoid effect dependency churn
+    // Stable refs for callbacks (avoid effect re-triggers)
     const onDetectionsRef = useRef(onDetections);
     onDetectionsRef.current = onDetections;
 
@@ -42,9 +75,8 @@ export default function StreamNode({
     const [showPlayButton, setShowPlayButton] = useState(false);
     const [netState, setNetState] = useState<string>("init");
 
-    // Determine device identity
     const [localDeviceId] = useState(() => {
-        if (typeof window !== 'undefined') {
+        if (typeof window !== "undefined") {
             let id = localStorage.getItem("device_id");
             if (!id) {
                 id = Math.random().toString(36).substring(2, 15);
@@ -57,6 +89,9 @@ export default function StreamNode({
 
     const isOwner = stream.type === "client_cam" && stream.device_id === localDeviceId;
     const isClientCam = stream.type === "client_cam";
+
+    /** Derive a deterministic PeerJS ID from the stream ID */
+    const peerIdForStream = `akawa-${stream.id}`;
 
     /* ------------------------------------------------------------------ */
     /*  Detection overlay drawing                                          */
@@ -114,9 +149,10 @@ export default function StreamNode({
     const drawDetectionsRef = useRef(drawDetections);
     drawDetectionsRef.current = drawDetections;
 
-    /* ------------------------------------------------------------------ */
-    /*  PROVIDER: capture camera → send raw JPEG blobs via WebSocket       */
-    /* ------------------------------------------------------------------ */
+    /* ================================================================== */
+    /*  Effect 1: PROVIDER — camera + PeerJS + AI frame sender             */
+    /*  (client_cam owner only)                                            */
+    /* ================================================================== */
     useEffect(() => {
         if (!isClientCam || !isOwner) return;
 
@@ -126,44 +162,87 @@ export default function StreamNode({
         const startProvider = async () => {
             if (!active) return;
             setNetState("starting_camera");
+
             try {
-                const streamObj = await navigator.mediaDevices.getUserMedia({
+                // 1. Acquire camera
+                const mediaStream = await navigator.mediaDevices.getUserMedia({
                     video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
                     audio: true,
                 });
-                if (!active) { streamObj.getTracks().forEach(t => t.stop()); return; }
-                localStreamRef.current = streamObj;
+                if (!active) { mediaStream.getTracks().forEach(t => t.stop()); return; }
+                localStreamRef.current = mediaStream;
 
+                // Show local preview
                 if (videoRef.current) {
-                    videoRef.current.srcObject = streamObj;
+                    videoRef.current.srcObject = mediaStream;
                     videoRef.current.muted = true;
                     videoRef.current.play().catch(() => { });
                     setVideoLoaded(true);
                 }
                 setIsStreaming(true);
-                setNetState("broadcasting");
+                setNetState("creating_peer");
 
-                // Open WebSocket — send raw binary JPEG blobs
-                const ws = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
-                providerWsRef.current = ws;
+                // 2. Create PeerJS peer with deterministic ID
+                const peer = new Peer(peerIdForStream, { config: ICE_CONFIG });
+                peerRef.current = peer;
+
+                peer.on("open", () => {
+                    if (!active) return;
+                    setNetState("broadcasting");
+                    console.log(`[Provider] PeerJS ready: ${peer.id}`);
+                });
+
+                // Answer any incoming viewer calls with our media stream
+                peer.on("call", (call) => {
+                    if (!active) return;
+                    console.log(`[Provider] Answering call from viewer`);
+                    call.answer(mediaStream);
+                });
+
+                peer.on("error", (err) => {
+                    console.error("[Provider] PeerJS error:", err.type, err.message);
+                    if (err.type === "unavailable-id") {
+                        // Peer ID still cached — retry after short delay
+                        setNetState("reconnecting");
+                        setTimeout(() => {
+                            if (active && peerRef.current) {
+                                peerRef.current.destroy();
+                                peerRef.current = null;
+                            }
+                            if (active) startProvider();
+                        }, 3000);
+                    }
+                });
+
+                peer.on("disconnected", () => {
+                    if (active) {
+                        setNetState("reconnecting");
+                        peer.reconnect();
+                    }
+                });
+
+                // 3. Open WS to send low-res AI frames to backend
+                const aiWs = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
+                providerWsRef.current = aiWs;
                 let sending = false;
                 let captureInterval: ReturnType<typeof setInterval> | null = null;
 
                 const canvas = document.createElement("canvas");
                 const ctx = canvas.getContext("2d", { willReadFrequently: false });
 
-                ws.binaryType = "arraybuffer";
+                aiWs.binaryType = "arraybuffer";
 
-                ws.onopen = () => {
+                aiWs.onopen = () => {
                     captureInterval = setInterval(() => {
-                        if (!active || ws.readyState !== WebSocket.OPEN || !videoRef.current) return;
+                        if (!active || aiWs.readyState !== WebSocket.OPEN || !videoRef.current) return;
                         if (videoRef.current.readyState < 2 || sending) return;
 
                         const vw = videoRef.current.videoWidth;
                         const vh = videoRef.current.videoHeight;
                         if (!vw || !vh) return;
 
-                        const targetW = 640;
+                        // Low res for AI only (viewers get full-res via WebRTC)
+                        const targetW = 384;
                         const scale = targetW / vw;
                         canvas.width = targetW;
                         canvas.height = Math.round(vh * scale);
@@ -173,24 +252,29 @@ export default function StreamNode({
                         canvas.toBlob(
                             (blob) => {
                                 sending = false;
-                                if (!blob || ws.readyState !== WebSocket.OPEN) return;
-                                // Send raw binary — no base64, no JSON wrapping
-                                ws.send(blob);
+                                if (!blob || aiWs.readyState !== WebSocket.OPEN) return;
+                                aiWs.send(blob); // Raw binary JPEG
                             },
                             "image/jpeg",
-                            0.7,
+                            0.5,
                         );
-                    }, 100); // ~10 FPS
+                    }, 150); // ~6-7 FPS for AI inference
                 };
 
-                ws.onclose = () => {
+                aiWs.onclose = () => {
                     if (captureInterval) clearInterval(captureInterval);
+                    // Reconnect WS for AI frames
                     if (active) {
-                        setNetState("reconnecting");
-                        setTimeout(startProvider, 3000);
+                        setTimeout(() => {
+                            if (!active) return;
+                            const newWs = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
+                            providerWsRef.current = newWs;
+                            newWs.binaryType = "arraybuffer";
+                            newWs.onopen = aiWs.onopen;
+                            newWs.onclose = aiWs.onclose;
+                        }, 2000);
                     }
                 };
-
             } catch (err) {
                 console.error("[Provider] camera fail:", err);
                 setNetState("camera_error");
@@ -202,26 +286,111 @@ export default function StreamNode({
         return () => {
             active = false;
             if (providerWsRef.current) { providerWsRef.current.close(); providerWsRef.current = null; }
+            if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
             if (localStreamRef.current) {
                 localStreamRef.current.getTracks().forEach(t => t.stop());
                 localStreamRef.current = null;
             }
         };
-    }, [isClientCam, isOwner, stream.id]);
+    }, [isClientCam, isOwner, stream.id, peerIdForStream]);
 
-    /* ------------------------------------------------------------------ */
-    /*  VIEWER: receive binary frames + text detections via WebSocket       */
-    /*  (non-owner client_cam viewers AND all server_cam/rtsp viewers)      */
-    /* ------------------------------------------------------------------ */
+    /* ================================================================== */
+    /*  Effect 2: VIEWER — PeerJS WebRTC call to provider                  */
+    /*  (client_cam non-owner only)                                        */
+    /* ================================================================== */
     useEffect(() => {
-        if (isClientCam && isOwner) return;
+        if (!isClientCam || isOwner) return;
+
+        let active = true;
+        let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+        const connectViewer = () => {
+            if (!active) return;
+            setNetState("connecting_peer");
+
+            const peer = new Peer({ config: ICE_CONFIG });
+            peerRef.current = peer;
+
+            peer.on("open", () => {
+                if (!active) return;
+                setNetState("calling_provider");
+                console.log(`[Viewer] PeerJS open, calling provider: ${peerIdForStream}`);
+
+                // Call the provider's peer with no local stream (receive-only)
+                const call = peer.call(peerIdForStream, new MediaStream());
+
+                call.on("stream", (remoteStream) => {
+                    if (!active) return;
+                    console.log("[Viewer] Got remote stream from provider");
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = remoteStream;
+                        videoRef.current.play().catch(() => setShowPlayButton(true));
+                        setVideoLoaded(true);
+                        setIsStreaming(true);
+                        setNetState("streaming");
+                    }
+                });
+
+                call.on("close", () => {
+                    if (!active) return;
+                    setVideoLoaded(false);
+                    setIsStreaming(false);
+                    setNetState("reconnecting");
+                    retryTimer = setTimeout(() => {
+                        if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
+                        connectViewer();
+                    }, 3000);
+                });
+
+                call.on("error", (err) => {
+                    console.error("[Viewer] Call error:", err);
+                    setNetState("reconnecting");
+                    retryTimer = setTimeout(() => {
+                        if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
+                        connectViewer();
+                    }, 3000);
+                });
+            });
+
+            peer.on("error", (err) => {
+                console.error("[Viewer] PeerJS error:", err.type, err.message);
+                if (err.type === "peer-unavailable") {
+                    // Provider not online yet — retry
+                    setNetState("waiting_for_camera");
+                } else {
+                    setNetState("reconnecting");
+                }
+                retryTimer = setTimeout(() => {
+                    if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
+                    connectViewer();
+                }, 4000);
+            });
+
+            peer.on("disconnected", () => {
+                if (active) peer.reconnect();
+            });
+        };
+
+        connectViewer();
+
+        return () => {
+            active = false;
+            if (retryTimer) clearTimeout(retryTimer);
+            if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
+        };
+    }, [isClientCam, isOwner, stream.id, peerIdForStream]);
+
+    /* ================================================================== */
+    /*  Effect 3: VIEWER — server_cam / rtsp via WebSocket frame relay      */
+    /* ================================================================== */
+    useEffect(() => {
+        if (isClientCam) return;
 
         let active = true;
         const wsUrl = getWsUrl();
         let viewerWs: WebSocket | null = null;
         let pingInterval: ReturnType<typeof setInterval> | null = null;
         let loadedOnce = false;
-        // Track the previous object URL so we can revoke it (prevents memory leaks)
         let prevBlobUrl: string | null = null;
 
         const connect = () => {
@@ -234,15 +403,12 @@ export default function StreamNode({
                 setNetState("streaming");
                 setIsStreaming(true);
                 pingInterval = setInterval(() => {
-                    if (viewerWs?.readyState === WebSocket.OPEN) {
-                        viewerWs.send("ping");
-                    }
+                    if (viewerWs?.readyState === WebSocket.OPEN) viewerWs.send("ping");
                 }, 15000);
             };
 
             viewerWs.onmessage = (event) => {
                 if (event.data instanceof Blob) {
-                    // Binary message = raw JPEG frame
                     if (imgRef.current) {
                         const url = URL.createObjectURL(event.data);
                         if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
@@ -251,7 +417,6 @@ export default function StreamNode({
                         if (!loadedOnce) { loadedOnce = true; setVideoLoaded(true); }
                     }
                 } else if (typeof event.data === "string") {
-                    // Text message = detection JSON
                     try {
                         const data = JSON.parse(event.data);
                         if (data.detections) {
@@ -267,10 +432,6 @@ export default function StreamNode({
                 setIsStreaming(false);
                 if (active) setTimeout(connect, 3000);
             };
-
-            viewerWs.onerror = () => {
-                // Let onclose handle reconnection
-            };
         };
 
         connect();
@@ -281,13 +442,14 @@ export default function StreamNode({
             if (viewerWs) viewerWs.close();
             if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
         };
-    }, [isClientCam, isOwner, stream.id]);
+    }, [isClientCam, stream.id]);
 
-    /* ------------------------------------------------------------------ */
-    /*  PROVIDER detection overlay — subscribe to stream_out for AI results */
-    /* ------------------------------------------------------------------ */
+    /* ================================================================== */
+    /*  Effect 4: Detection overlay — all client_cam users subscribe to     */
+    /*  stream_out for AI detection results                                 */
+    /* ================================================================== */
     useEffect(() => {
-        if (!isClientCam || !isOwner) return;
+        if (!isClientCam) return; // server_cam gets detections in Effect 3
 
         let active = true;
         const wsUrl = getWsUrl();
@@ -297,17 +459,15 @@ export default function StreamNode({
         const connectDetWs = () => {
             if (!active) return;
             detWs = new WebSocket(`${wsUrl}/ws/stream_out/${stream.id}`);
-            detWs.binaryType = "blob"; // We'll ignore binary frames for the provider
+            detWs.binaryType = "blob"; // ignore any binary
 
             detWs.onopen = () => {
                 pingInterval = setInterval(() => {
-                    if (detWs?.readyState === WebSocket.OPEN) {
-                        detWs.send("ping");
-                    }
+                    if (detWs?.readyState === WebSocket.OPEN) detWs.send("ping");
                 }, 15000);
             };
+
             detWs.onmessage = (event) => {
-                // Provider only cares about text detection messages, not binary frames
                 if (typeof event.data === "string") {
                     try {
                         const data = JSON.parse(event.data);
@@ -318,26 +478,27 @@ export default function StreamNode({
                     } catch { /* ignore */ }
                 }
             };
+
             detWs.onclose = () => {
                 if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
                 if (active) setTimeout(connectDetWs, 3000);
             };
         };
+
         connectDetWs();
+
         return () => {
             active = false;
             if (pingInterval) clearInterval(pingInterval);
             if (detWs) detWs.close();
         };
-    }, [isClientCam, isOwner, stream.id]);
+    }, [isClientCam, stream.id]);
 
     /* ------------------------------------------------------------------ */
-    /*  Audio mute control                                                 */
+    /*  Audio mute                                                         */
     /* ------------------------------------------------------------------ */
     useEffect(() => {
-        if (videoRef.current) {
-            videoRef.current.muted = isOwner ? true : isMuted;
-        }
+        if (videoRef.current) videoRef.current.muted = isOwner ? true : isMuted;
     }, [isMuted, isOwner]);
 
     /* ------------------------------------------------------------------ */
@@ -347,9 +508,8 @@ export default function StreamNode({
         e.stopPropagation();
         const confirmed = window.confirm(`Terminate ${stream.name}? This removes it for all users.`);
         if (confirmed) {
-            if (localStreamRef.current) {
-                localStreamRef.current.getTracks().forEach((t) => t.stop());
-            }
+            if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
+            if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
             if (providerWsRef.current) providerWsRef.current.close();
             onDelete(stream.id, true);
         }
@@ -381,12 +541,9 @@ export default function StreamNode({
                     {stream.name} [{stream.type.toUpperCase()}]
                 </span>
                 <div className="flex gap-2">
-                    {isClientCam && isOwner && (
+                    {isClientCam && (
                         <button
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                setIsMuted(!isMuted);
-                            }}
+                            onClick={(e) => { e.stopPropagation(); setIsMuted(!isMuted); }}
                             className={`bg-black border border-[var(--color-iron)] px-1 flex items-center justify-center ${isMuted ? 'text-[var(--color-silica)]' : 'text-[var(--color-data)]'} hover:text-white`}
                             title={isMuted ? "Unmute audio" : "Mute audio"}
                         >
@@ -404,7 +561,6 @@ export default function StreamNode({
 
             {/* Video area */}
             <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
-                {/* Loading spinner */}
                 {!videoLoaded && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0d0d0d] z-30">
                         <div className="relative flex flex-col items-center">
@@ -426,47 +582,37 @@ export default function StreamNode({
                     </div>
                 )}
 
-                {/* Video element — only for provider (local preview) */}
-                {isClientCam && isOwner && (
+                {/* Video element for WebRTC streams (client_cam) */}
+                {isClientCam && (
                     <video
                         ref={videoRef}
                         className="absolute inset-0 h-full w-full object-cover z-10"
                         style={{ transform: "translateZ(0)" }}
                         autoPlay
-                        muted={true}
+                        muted={isOwner ? true : isMuted}
                         playsInline
                     />
                 )}
 
-                {/* Image element — for all viewers (binary WS frame relay) */}
-                {!(isClientCam && isOwner) && (
+                {/* Image element for WS relay streams (server_cam / rtsp) */}
+                {!isClientCam && (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                        ref={imgRef}
-                        className="absolute inset-0 h-full w-full object-cover z-10"
-                        alt="Stream"
-                    />
+                    <img ref={imgRef} className="absolute inset-0 h-full w-full object-cover z-10" alt="Stream" />
                 )}
 
-                {/* Detection overlay canvas */}
+                {/* Detection overlay */}
                 <canvas ref={overlayRef} className="absolute inset-0 w-full h-full z-20 pointer-events-none" />
 
                 {/* Manual play button (mobile autoplay restriction) */}
                 {showPlayButton && (
                     <div
                         className="absolute inset-0 z-40 flex items-center justify-center bg-black/50 cursor-pointer"
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setShowPlayButton(false);
-                            videoRef.current?.play().catch(() => { });
-                        }}
+                        onClick={(e) => { e.stopPropagation(); setShowPlayButton(false); videoRef.current?.play().catch(() => { }); }}
                     >
                         <div className="w-16 h-16 rounded-full bg-white/20 border-2 border-white flex items-center justify-center backdrop-blur-sm">
                             <Play className="w-8 h-8 text-white ml-1" fill="white" />
                         </div>
-                        <span className="absolute bottom-4 text-[10px] font-mono font-bold text-white/80 tracking-widest">
-                            TAP TO START FEED
-                        </span>
+                        <span className="absolute bottom-4 text-[10px] font-mono font-bold text-white/80 tracking-widest">TAP TO START FEED</span>
                     </div>
                 )}
             </div>

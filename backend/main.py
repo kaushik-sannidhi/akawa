@@ -458,14 +458,14 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
 
 
 
-# ==================== Stream Input (frames from camera provider) ====================
+# ==================== Stream Input (AI frames from camera provider) ====================
 
 
 @app.websocket("/ws/stream_in/{stream_id}")
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
-    Receives raw binary JPEG frames from the camera provider.
-    Decodes for AI inference and forwards raw bytes to all viewers.
+    Receives low-res binary JPEG frames from the camera provider for AI only.
+    Video delivery to viewers is handled by PeerJS WebRTC (P2P).
     """
     import asyncio as _aio
 
@@ -475,7 +475,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    logger.info(f"[WS IN] Camera provider connected on stream {stream_id}")
+    logger.info(f"[WS IN] AI frame provider connected on stream {stream_id}")
     stream.status = "active"
     stream_manager.ensure_ai_task(stream)
 
@@ -490,31 +490,12 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
 
             if "bytes" in message and message["bytes"]:
                 jpeg_bytes = message["bytes"]
-                # Decode for AI in thread pool
                 frame = await _aio.to_thread(_decode_jpeg, jpeg_bytes)
                 if frame is not None:
                     stream.latest_frame_cv2 = frame
-                # Forward raw bytes to all viewers instantly
-                from app.stream_manager import stream_manager as sm
-                sm._broadcast_bytes(stream, jpeg_bytes)
-
-            elif "text" in message and message["text"]:
-                # Legacy JSON fallback (older clients)
-                try:
-                    payload = json.loads(message["text"])
-                    if payload.get("type") == "frame" and payload.get("frame"):
-                        raw_b64 = payload["frame"]
-                        clean = raw_b64.split(',', 1)[-1] if ',' in raw_b64 else raw_b64
-                        jpeg_bytes = base64.b64decode(clean)
-                        frame = await _aio.to_thread(_decode_jpeg, jpeg_bytes)
-                        if frame is not None:
-                            stream.latest_frame_cv2 = frame
-                        sm._broadcast_bytes(stream, jpeg_bytes)
-                except Exception:
-                    pass  # ignore malformed text
 
     except WebSocketDisconnect:
-        logger.info(f"[WS IN] Camera provider disconnected from stream {stream_id}")
+        logger.info(f"[WS IN] AI frame provider disconnected from stream {stream_id}")
     except Exception as e:
         logger.error(f"[WS IN] Error on stream {stream_id}: {e}")
     finally:
