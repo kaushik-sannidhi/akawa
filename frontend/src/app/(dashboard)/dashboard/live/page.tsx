@@ -163,7 +163,7 @@ export default function LiveStreamPage() {
                         />
                     </div>
                 ) : orderedStreams.length === 2 ? (
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-hidden min-h-[240px]">
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-y-auto auto-rows-[minmax(240px,_1fr)] min-h-[240px]">
                         {orderedStreams.map((s) => (
                             <StreamNode
                                 key={s.id}
@@ -176,7 +176,7 @@ export default function LiveStreamPage() {
                         ))}
                     </div>
                 ) : (
-                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-hidden auto-rows-fr min-h-[240px]">
+                    <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-y-auto auto-rows-[minmax(240px,_1fr)] min-h-[240px]">
                         <StreamNode
                             key={orderedStreams[0].id}
                             stream={orderedStreams[0]}

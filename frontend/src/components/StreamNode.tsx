@@ -43,7 +43,7 @@ function tuneVideoSender(pc: RTCPeerConnection) {
         }
         params.encodings[0].maxBitrate = 1_500_000;            // 1.5 Mbps cap — good balance
         params.degradationPreference = "maintain-framerate";    // Prefer FPS over resolution
-        sender.setParameters(params).catch(() => {});
+        sender.setParameters(params).catch(() => { });
     }
 }
 
@@ -172,7 +172,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             }
         }
 
-        video.play().catch(() => {});
+        video.play().catch(() => { });
     }, [isOwnerOfClientCam]);
 
     const stopLocalStream = useCallback(() => {
@@ -202,13 +202,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
         // the canvas to scale on mobile — fixed-pixel labels became huge,
         // covering the video underneath and making it look like only AI
         // tracings were visible.
-        const displayW = overlayRef.current.clientWidth  || 640;
+        const displayW = overlayRef.current.clientWidth || 640;
         const displayH = overlayRef.current.clientHeight || 480;
 
         // Avoid expensive resize every frame — only touch the buffer when
         // the display size actually changed.
         if (overlayRef.current.width !== displayW || overlayRef.current.height !== displayH) {
-            overlayRef.current.width  = displayW;
+            overlayRef.current.width = displayW;
             overlayRef.current.height = displayH;
         }
 
@@ -219,9 +219,9 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
         // Scale label sizes relative to the container so they stay readable
         // on both 320 px phones and 1920 px desktops.
         const scale = Math.max(displayW / 1280, 0.4);   // min 40 %
-        const lineW   = Math.max(2, 2 * scale);
+        const lineW = Math.max(2, 2 * scale);
         const fontSize = Math.round(Math.max(9, 10 * scale));
-        const labelH   = Math.round(Math.max(14, 20 * scale));
+        const labelH = Math.round(Math.max(14, 20 * scale));
 
         detections.forEach((det: any) => {
             if (det.confidence < 0.45) return;
@@ -390,10 +390,10 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         const pc = peerConnectionsRef.current.get(msg.peerId);
                         if (pc) {
                             if (msg.candidate) {
-                                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+                                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => { });
                             } else {
                                 // null candidate = end-of-candidates signal
-                                await pc.addIceCandidate(undefined as any).catch(() => {});
+                                await pc.addIceCandidate(undefined as any).catch(() => { });
                             }
                         }
                     }
@@ -584,10 +584,10 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         const pc = peerConnectionsRef.current.get("provider");
                         if (pc) {
                             if (msg.candidate) {
-                                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+                                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => { });
                             } else {
                                 // null = end-of-candidates
-                                await pc.addIceCandidate(undefined as any).catch(() => {});
+                                await pc.addIceCandidate(undefined as any).catch(() => { });
                             }
                         }
                     }
@@ -729,7 +729,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             animate={{ opacity: 1, scale: 1 }}
             transition={{ type: "spring", stiffness: 300, damping: 30, mass: 0.8 }}
             onClick={onSelect}
-            className={`relative bg-[#0A0A0A] flex flex-col group cursor-pointer origin-center ${isPrimary ? "sm:col-span-2 sm:row-span-2 border-[2px] border-[var(--color-iron)]" : "border-[2px] border-[var(--color-dim)] overflow-hidden hover:border-[var(--color-data)]"}`}
+            className={`relative w-full h-full flex-1 min-h-[240px] bg-[#0A0A0A] flex flex-col group cursor-pointer origin-center ${isPrimary ? "sm:col-span-2 sm:row-span-2 border-[2px] border-[var(--color-iron)]" : "border-[2px] border-[var(--color-dim)] overflow-hidden hover:border-[var(--color-data)]"}`}
         >
             {isPrimary && <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.5)_1px,transparent_1px)] bg-[size:32px_32px] opacity-10 pointer-events-none z-0" />}
 
@@ -740,7 +740,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             <div className="absolute bottom-4 right-4 border-r-[2px] border-b-[2px] border-[var(--color-silica)] w-8 h-8 z-30 pointer-events-none opacity-50" />
 
             {/* Header bar */}
-            <div className={`p-2 flex justify-between z-30 bg-gradient-to-b from-black/80 to-transparent ${!isPrimary && "bg-black border-b-[2px] border-[var(--color-iron)]"} absolute top-0 left-0 w-full`}>
+            <div className={`p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent ${!isPrimary && "bg-black border-b-[2px] border-[var(--color-iron)]"} absolute top-0 left-0 w-full`}>
                 <span className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] truncate max-w-[150px]`}>
                     {stream.name} [{stream.type.toUpperCase()}]
                     {isClientCam && !showFallbackImg && (
