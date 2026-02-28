@@ -109,7 +109,7 @@ class ReyvazResponse(BaseModel):
     error: Optional[str] = None
 
 
-@app.cls(image=reyvaz_image, volumes={REYVAZ_MODEL_DIR: reyvaz_volume}, timeout=120)
+@app.cls(image=reyvaz_image, gpu="a10g", volumes={REYVAZ_MODEL_DIR: reyvaz_volume}, timeout=120, keep_warm=1)
 class ReyvazDetector:
     """
     LSTM/GRU acoustic threat detector for glassbreak and gunshot events.
@@ -321,7 +321,7 @@ class Qwen2Response(BaseModel):
     error: Optional[str] = None
 
 
-@app.cls(image=qwen2_image, gpu="a100", volumes={QWEN2_MODEL_DIR: qwen2_volume}, timeout=300)
+@app.cls(image=qwen2_image, gpu="a100", volumes={QWEN2_MODEL_DIR: qwen2_volume}, timeout=300, keep_warm=1)
 class Qwen2AudioModel:
     """
     Qwen2-Audio-7B-Instruct for deep audio reasoning.
