@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Weapon Detection API")
 fall_detector = FallDetector()
 
-# Setup CORS — allow local dev, itsakawa.tech, Vercel, ingeniumstem, Cloudflare Pages
+# Setup CORS — allow local dev, itsakawa.tech, Vercel, Render
 default_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -38,7 +38,7 @@ allow_origins = configured_origins if configured_origins else default_origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    # Match any subdomain of itsakawa.tech, vercel.app, ingeniumstem.org, or pages.dev
+    # Match any subdomain of itsakawa.tech, vercel.app, or akawa.onrender.com
     allow_origin_regex=r"https://([a-zA-Z0-9\-]+\.)?(itsakawa\.tech|vercel\.app|akawa\.onrender\.com)",
     allow_credentials=True,
     allow_methods=["*"],

@@ -3,7 +3,7 @@ export const getBaseUrl = () => {
         return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
     }
 
-    // Default to the Cloudflare tunnel domain on non-local hosts
+    // Default to the Render backend on non-local hosts
     if (typeof window !== 'undefined'
         && window.location.hostname !== 'localhost'
         && window.location.hostname !== '127.0.0.1') {
