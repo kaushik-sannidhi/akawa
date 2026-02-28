@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { useSettings } from "@/context/SettingsContext";
 import { useTelemetry } from "@/context/TelemetryContext";
 import { getBaseUrl } from "@/lib/config";
+import { auth } from "@/lib/firebase";
+import { getDatabase, ref, get, set } from "firebase/database";
 
 type ModelOption = { id: string; name: string };
 
@@ -13,9 +15,19 @@ export default function SettingsPage() {
     const [models, setModels] = useState<ModelOption[]>([]);
     const [loading, setLoading] = useState(true);
 
+    const [alertsConfig, setAlertsConfig] = useState({
+        enabled: true,
+        email: "",
+        discord_webhook: "",
+        whatsapp_number: "",
+        whatsapp_apikey: "",
+        signal_number: "",
+        signal_apikey: ""
+    });
+
     const displayConfidence = Math.round(confidenceThreshold * 100);
 
-    // Fetch available models from backend
+    // Fetch available models from backend and alert config from Firebase
     useEffect(() => {
         const fetchModels = async () => {
             try {
@@ -25,15 +37,44 @@ export default function SettingsPage() {
             } catch (err) {
                 console.error("Failed to fetch models:", err);
                 setModels([{ id: "latest", name: "Latest (Auto-Select)" }]);
-            } finally {
-                setLoading(false);
             }
         };
-        fetchModels();
+
+        const fetchAlertsConfig = async () => {
+            const uid = auth.currentUser?.uid;
+            if (uid) {
+                const db = getDatabase();
+                const configRef = ref(db, `alerts_config/${uid}`);
+                try {
+                    const snapshot = await get(configRef);
+                    if (snapshot.exists()) {
+                        setAlertsConfig((prev) => ({ ...prev, ...snapshot.val() }));
+                    } else if (auth.currentUser?.email) {
+                        setAlertsConfig((prev) => ({ ...prev, email: auth.currentUser!.email || "" }));
+                    }
+                } catch (err) {
+                    console.error("Failed to fetch alert configs", err);
+                }
+            }
+        };
+
+        Promise.all([fetchModels(), fetchAlertsConfig()]).finally(() => setLoading(false));
     }, []);
 
-    const handleCommit = () => {
+    const handleCommit = async () => {
         logSysEvent(`[INFO] GLOBAL CONFIGURATION UPDATED [MODEL: ${selectedModel}, CONFIDENCE: ${displayConfidence}%]`);
+
+        const uid = auth.currentUser?.uid;
+        if (uid) {
+            const db = getDatabase();
+            const configRef = ref(db, `alerts_config/${uid}`);
+            try {
+                await set(configRef, alertsConfig);
+                logSysEvent(`[INFO] ALERT CONFIGURATION SYNCED WITH BACKEND`);
+            } catch (err) {
+                console.error("Failed to save alert configs", err);
+            }
+        }
     };
 
     return (
@@ -111,6 +152,102 @@ export default function SettingsPage() {
                             THIS THRESHOLD IS APPLIED GLOBALLY TO ALL VIDEO ANALYSIS AND LIVE CAMERA STREAMS.
                         </p>
                     </div>
+                </div>
+            </section>
+
+            {/* Alert Routing */}
+            <section className="bg-black border-[2px] border-[var(--color-iron)] p-6 structure-block">
+                <div className="flex justify-between items-center border-b border-[var(--color-iron)] pb-2 mb-6">
+                    <h2 className="text-[10px] font-bold text-[var(--color-silica)]">[ ALERT_ROUTING ]</h2>
+                    <label className="flex items-center gap-2 cursor-crosshair">
+                        <span className="text-[10px] text-[var(--color-silica)]">MASTER TOGGLE</span>
+                        <input
+                            type="checkbox"
+                            checked={alertsConfig.enabled}
+                            onChange={(e) => setAlertsConfig({ ...alertsConfig, enabled: e.target.checked })}
+                            className="w-4 h-4 appearance-none border-[1px] border-[var(--color-iron)] checked:bg-[var(--color-alert)] checked:border-[var(--color-alert)] cursor-crosshair focus:outline-none"
+                        />
+                    </label>
+                </div>
+
+                <div className={`space-y-4 ${!alertsConfig.enabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <div className="flex flex-col gap-2">
+                        <span className="font-bold text-xs">EMAIL DESTINATION</span>
+                        <input
+                            type="email"
+                            placeholder="user@example.com"
+                            value={alertsConfig.email}
+                            onChange={(e) => setAlertsConfig({ ...alertsConfig, email: e.target.value })}
+                            className="bg-black border-[2px] border-[var(--color-iron)] text-[var(--color-data)] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[var(--color-alert)] outline-none"
+                        />
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <span className="font-bold text-xs">DISCORD WEBHOOK URL</span>
+                        <input
+                            type="url"
+                            placeholder="https://discord.com/api/webhooks/..."
+                            value={alertsConfig.discord_webhook}
+                            onChange={(e) => setAlertsConfig({ ...alertsConfig, discord_webhook: e.target.value })}
+                            className="bg-black border-[2px] border-[var(--color-iron)] text-[var(--color-data)] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[var(--color-alert)] outline-none"
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-2">
+                            <span className="font-bold text-xs text-[#25D366]">WHATSAPP NUMBER</span>
+                            <div className="flex items-center">
+                                <span className="bg-[var(--color-dim)] border-[2px] border-r-0 border-[var(--color-iron)] text-[var(--color-silica)] px-3 py-3 font-mono text-xs">+</span>
+                                <input
+                                    type="text"
+                                    placeholder="1234567890"
+                                    value={alertsConfig.whatsapp_number}
+                                    onChange={(e) => setAlertsConfig({ ...alertsConfig, whatsapp_number: e.target.value.replace(/\D/g, '') })}
+                                    className="w-full bg-black border-[2px] border-[var(--color-iron)] text-[#25D366] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[var(--color-alert)] outline-none"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <span className="font-bold text-xs text-[#25D366]">CALLMEBOT WHATSAPP API KEY</span>
+                            <input
+                                type="text"
+                                placeholder="123456"
+                                value={alertsConfig.whatsapp_apikey}
+                                onChange={(e) => setAlertsConfig({ ...alertsConfig, whatsapp_apikey: e.target.value })}
+                                className="bg-black border-[2px] border-[var(--color-iron)] text-[#25D366] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[var(--color-alert)] outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="flex flex-col gap-2">
+                            <span className="font-bold text-xs text-[#3A76F0]">SIGNAL NUMBER</span>
+                            <div className="flex items-center">
+                                <span className="bg-[var(--color-dim)] border-[2px] border-r-0 border-[var(--color-iron)] text-[var(--color-silica)] px-3 py-3 font-mono text-xs">+</span>
+                                <input
+                                    type="text"
+                                    placeholder="1234567890"
+                                    value={alertsConfig.signal_number}
+                                    onChange={(e) => setAlertsConfig({ ...alertsConfig, signal_number: e.target.value.replace(/\D/g, '') })}
+                                    className="w-full bg-black border-[2px] border-[var(--color-iron)] text-[#3A76F0] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[var(--color-alert)] outline-none"
+                                />
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <span className="font-bold text-xs text-[#3A76F0]">CALLMEBOT SIGNAL API KEY</span>
+                            <input
+                                type="text"
+                                placeholder="123456"
+                                value={alertsConfig.signal_apikey}
+                                onChange={(e) => setAlertsConfig({ ...alertsConfig, signal_apikey: e.target.value })}
+                                className="bg-black border-[2px] border-[var(--color-iron)] text-[#3A76F0] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[var(--color-alert)] outline-none"
+                            />
+                        </div>
+                    </div>
+
+                    <p className="text-[10px] text-[var(--color-silica)] mt-4">
+                        TUTORIAL: TO USE WHATSAPP/SIGNAL ALERTS, GET A FREE API KEY FROM CALLMEBOT.COM. LEAVE BLANK TO DISABLE.
+                    </p>
                 </div>
             </section>
 

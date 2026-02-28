@@ -206,6 +206,13 @@ class StreamManager:
                 if any(d.get("is_weapon") for d in detections):
                     telemetry_service.log_anomaly(
                         f"NODE_WS_{stream.id[:6]}", stream.uid)
+                    from app.notifications import notification_manager
+                    weapon_det = next(d for d in detections if d.get("is_weapon"))
+                    notification_manager.send_alert(
+                        uid=stream.uid,
+                        title=f"🚨 Weapon Detected on Live Stream: {stream.name}",
+                        message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence."
+                    )
 
                 # Only broadcast when detection payload actually changed
                 det_payload = json.dumps({

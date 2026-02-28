@@ -105,11 +105,16 @@ async def preload_model():
                     for st_id, st_data in streams_dict.items():
                         st_type = st_data.get("type", "rtsp")
                         # client_cam streams are ephemeral — the browser must reconnect.
+                        # Delete them from Firebase on startup so they don't linger.
+                        if st_type == "client_cam":
+                            print(f"[STARTUP]   Removing stale client_cam stream {st_id} from Firebase")
+                            try:
+                                requests.delete(f"{FIREBASE_RTDB_BASE}/streams/{user_uid}/{st_id}.json")
+                            except Exception:
+                                pass
+                            continue
                         # Only restore server_cam / rtsp streams that the backend can
                         # drive on its own.
-                        if st_type == "client_cam":
-                            print(f"[STARTUP]   Skipping client_cam stream {st_id} (ephemeral)")
-                            continue
                         stream_manager.add_stream(
                             name=st_data.get("name", "Unknown"),
                             stream_type=st_type,
@@ -246,6 +251,7 @@ class SaveAlertsRequest(BaseModel):
     uid: str
     video_id: str
     alerts: List[AlertItem]
+    send_alerts: bool = False
 
 
 @app.post("/api/alerts")
@@ -265,6 +271,16 @@ async def save_alerts(req: SaveAlertsRequest):
 
         url = f"{FIREBASE_RTDB_BASE}/alerts/{req.uid}/{req.video_id}.json"
         resp = requests.put(url, json=alert_data)
+        
+        if req.send_alerts and alert_data:
+            from app.notifications import notification_manager
+            first_alert = alert_data[0]
+            notification_manager.send_alert(
+                uid=req.uid,
+                title="🚨 Weapon Detected in Video Archive!",
+                message=f"A {first_alert['display_label']} was detected with {int(first_alert['confidence'] * 100)}% confidence.",
+            )
+
         if resp.status_code == 200:
             return {"status": "success", "count": len(alert_data)}
         else:
@@ -331,6 +347,13 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
                         telemetry_service.log_frames(1, uid)
                         if any(d.get("is_weapon") for d in detections):
                             telemetry_service.log_anomaly("NODE_WS_STREAM", uid)
+                            from app.notifications import notification_manager
+                            weapon_det = next(d for d in detections if d.get("is_weapon"))
+                            notification_manager.send_alert(
+                                uid=uid,
+                                title="🚨 Weapon Detected in Live Detection Stream!",
+                                message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence."
+                            )
 
                         msg = {
                             "timestamp": timestamp,
@@ -358,65 +381,15 @@ class StreamCreateRequest(BaseModel):
     device_id: str = ""
 
 
-_firebase_stream_cache: dict = {}  # uid -> {"ts": float, "valid_ids": set}
-
-def _invalidate_firebase_cache(uid: str):
-    """Invalidate cache for a user so the next list_streams re-fetches."""
-    _firebase_stream_cache.pop(uid, None)
-
 @app.get("/api/streams")
 def list_streams(uid: str = "anonymous"):
-    import time as _time
+    """Return all active streams for this user.
 
-    # Cross-reference Firebase to purge streams the user already removed there.
-    # We cache the Firebase response for 15 s per uid so we don't hammer RTDB.
-    now = _time.time()
-    cache_entry = _firebase_stream_cache.get(uid)
-
-    if cache_entry is None or (now - cache_entry["ts"]) > 15:
-        try:
-            fb_resp = requests.get(
-                f"{FIREBASE_RTDB_BASE}/streams/{uid}.json", timeout=4
-            )
-            if fb_resp.status_code == 200:
-                fb_data = fb_resp.json()
-                # Only act on a real dict response — null means no streams in Firebase
-                if isinstance(fb_data, dict) and len(fb_data) > 0:
-                    valid_ids = set(fb_data.keys())
-                    _firebase_stream_cache[uid] = {"valid_ids": valid_ids, "ts": now}
-
-                    # Only purge streams that are NOT in Firebase AND not recently created
-                    stale_ids = [
-                        sid for sid, s in list(stream_manager.streams.items())
-                        if s.uid == uid
-                        and sid not in valid_ids
-                        and (now - s.created_at) > 30   # protect streams < 30s old
-                    ]
-                    for sid in stale_ids:
-                        logger.info(f"[SYNC] Purging stale stream {sid} (removed from Firebase)")
-                        stream_manager.remove_stream(sid)
-                elif fb_data is None:
-                    # Firebase has NO streams for this user — purge all in-memory
-                    # BUT only if they're old AND have no active connections
-                    stale_ids = [
-                        sid for sid, s in list(stream_manager.streams.items())
-                        if s.uid == uid
-                        and (now - s.created_at) > 30   # protect streams < 30s old
-                        and s.provider_signal_ws is None
-                        and len(s.viewer_signal_wss) == 0
-                        and len(s.fallback_wss) == 0
-                    ]
-                    for sid in stale_ids:
-                        logger.info(f"[SYNC] Purging orphan stream {sid} (Firebase empty, no active connections)")
-                        stream_manager.remove_stream(sid)
-                    _firebase_stream_cache[uid] = {"valid_ids": set(), "ts": now}
-                else:
-                    # Unexpected shape — just cache and skip purge
-                    _firebase_stream_cache[uid] = {"valid_ids": set(), "ts": now}
-        except Exception as e:
-            # Firebase unreachable — do NOT purge anything, just skip sync
-            logger.warning(f"[SYNC] Firebase cross-ref failed (skipping purge): {e}")
-
+    The in-memory stream_manager is the source of truth while the backend
+    is running.  Firebase is only consulted at startup to restore persistent
+    (server_cam / rtsp) streams.  Streams are removed from Firebase when
+    explicitly deleted via DELETE /api/streams/{id}.
+    """
     all_streams = stream_manager.list_streams()
     user_streams = [s for s in all_streams if s.get("uid") == uid]
     return {"streams": user_streams}
@@ -449,8 +422,6 @@ async def create_stream(req: StreamCreateRequest):
     except Exception as e:
         print(f"[API] POST /api/streams - Failed to persist stream {stream.id} to Firebase: {e}")
 
-    # Invalidate cache so next list_streams sees the new stream
-    _invalidate_firebase_cache(req.uid)
 
     print(f"[API] POST /api/streams - Successfully created stream {stream.id}")
     return {"status": "success", "stream_id": stream.id}
@@ -467,8 +438,6 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
     except Exception as e:
         print(f"[API] DELETE /api/streams/{stream_id} - Failed to remove stream from Firebase: {e}")
 
-    # Invalidate cache so next list_streams reflects removal
-    _invalidate_firebase_cache(uid)
 
     print(f"[API] DELETE /api/streams/{stream_id} - Successfully deleted stream")
     return {"status": "success"}

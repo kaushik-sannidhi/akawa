@@ -13,6 +13,7 @@ const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"];
 
 export default function UploadAnalysisPage() {
     const [videoData, setVideoData] = useState<any>(null);
+    const [pendingUploadData, setPendingUploadData] = useState<any>(null);
     const [alerts, setAlerts] = useState<any[]>([]);
     const [alertsPanelOpen, setAlertsPanelOpen] = useState(false);
     const { confidenceThreshold, selectedModel } = useSettings();
@@ -32,8 +33,13 @@ export default function UploadAnalysisPage() {
     const [seekTrigger, setSeekTrigger] = useState<{ time: number; id: number } | null>(null);
 
     const handleUploadComplete = (data: any) => {
-        setVideoData(data);
+        setPendingUploadData(data);
+    };
+
+    const confirmAlerts = (wantsAlerts: boolean) => {
+        setVideoData({ ...pendingUploadData, sendAlerts: wantsAlerts });
         setAlerts([]);
+        setPendingUploadData(null);
     };
 
     // Persist alerts to Firebase whenever they change
@@ -48,6 +54,7 @@ export default function UploadAnalysisPage() {
                 body: JSON.stringify({
                     uid,
                     video_id: videoId,
+                    send_alerts: videoData?.sendAlerts || false,
                     alerts: alertsList.map((a) => ({
                         class_name: a.class_name,
                         confidence: a.confidence,
@@ -142,6 +149,35 @@ export default function UploadAnalysisPage() {
                                 <div className="flex-1 w-full flex items-center justify-center relative z-10">
                                     <VideoUpload onUploadComplete={handleUploadComplete} />
                                 </div>
+
+                                {/* Alert Confirmation Popup overlaying the uploader */}
+                                {pendingUploadData && (
+                                    <div className="absolute inset-0 bg-black/90 z-50 flex items-center justify-center p-4">
+                                        <div className="bg-[#050505] border-[2px] border-[var(--color-alert)] p-6 sm:p-8 w-full max-w-md shadow-[8px_8px_0_var(--color-alert)] text-center relative">
+                                            <div className="absolute top-0 left-0 w-2 h-2 border-t-[2px] border-l-[2px] border-[var(--color-alert)] -translate-x-[2px] -translate-y-[2px]" />
+                                            <div className="absolute bottom-0 right-0 w-2 h-2 border-b-[2px] border-r-[2px] border-[var(--color-alert)] translate-x-[2px] translate-y-[2px]" />
+
+                                            <h3 className="text-xl font-bold text-[var(--color-alert)] mb-4">[ ALERT_CONFIG ]</h3>
+                                            <p className="text-[10px] sm:text-xs text-[var(--color-silica)] mb-8">
+                                                DO YOU WANT TO RECEIVE NOTIFICATIONS (EMAIL/DISCORD/WHATSAPP/SIGNAL) IF A WEAPON OR ANOMALY IS DETECTED IN THIS UPLOAD PERIOD?
+                                            </p>
+                                            <div className="flex gap-4 justify-center">
+                                                <button
+                                                    onClick={() => confirmAlerts(true)}
+                                                    className="px-6 py-3 font-bold border-[2px] border-[var(--color-alert)] text-[var(--color-alert)] hover:bg-[var(--color-alert)] hover:text-black transition-none uppercase shadow-[4px_4px_0_var(--color-alert)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-alert)]"
+                                                >
+                                                    [ YES ]
+                                                </button>
+                                                <button
+                                                    onClick={() => confirmAlerts(false)}
+                                                    className="px-6 py-3 font-bold border-[2px] border-[var(--color-iron)] text-[var(--color-silica)] hover:border-white hover:text-white transition-none uppercase shadow-[4px_4px_0_var(--color-iron)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-iron)]"
+                                                >
+                                                    [ NO ]
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
