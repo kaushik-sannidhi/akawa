@@ -1,0 +1,9 @@
+name = "akawa-email-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-25"
+
+[vars]
+FROM_EMAIL = "alerts@itsakawa.tech"
+FROM_NAME = "Akawa Security Alerts"
+WORKER_SECRET = "akawa-alerts-secret-key-2026"
+

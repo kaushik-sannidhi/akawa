@@ -350,8 +350,9 @@ async def save_alerts(req: SaveAlertsRequest):
             first_alert = alert_data[0]
             notification_manager.send_alert(
                 uid=req.uid,
-                title="🚨 Weapon Detected in Video Archive!",
+                title="🚨 Threat Detected in Video Archive!",
                 message=f"A {first_alert['display_label']} was detected with {int(first_alert['confidence'] * 100)}% confidence.",
+                class_name=first_alert.get("class_name", "weapon"),
             )
 
         if resp.status_code == 200:
@@ -456,8 +457,9 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
                             weapon_det = next(d for d in detections if d.get("is_weapon"))
                             notification_manager.send_alert(
                                 uid=uid,
-                                title="🚨 Weapon Detected in Live Detection Stream!",
-                                message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence."
+                                title="🚨 Threat Detected in Live Detection Stream!",
+                                message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
+                                class_name=weapon_det.get("class_name", "weapon"),
                             )
 
                         msg = {
