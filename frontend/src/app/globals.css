@@ -1,26 +1,213 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Brutalist Palette */
+  --color-void: #000000;
+  --color-iron: #333333;
+  --color-alert: #FF3300;
+  --color-data: #FFFFFF;
+  --color-silica: #888888;
+  --color-dim: #0a0a0a;
+
+  --font-mono: var(--font-mono), monospace;
+  --font-sans: "Helvetica Neue", Arial, sans-serif;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-void: var(--color-void);
+  --color-iron: var(--color-iron);
+  --color-alert: var(--color-alert);
+  --color-data: var(--color-data);
+  --color-silica: var(--color-silica);
+  --color-dim: var(--color-dim);
+  --font-mono: var(--font-mono);
+  --font-sans: var(--font-sans);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-void);
+  color: var(--color-data);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+/* Exquisite Brutalism: Global Noise Overlay */
+body::after {
+  content: "";
+  position: fixed;
+  top: -50%;
+  left: -50%;
+  right: -50%;
+  bottom: -50%;
+  width: 200%;
+  height: 200vh;
+  background: transparent url('data:image/svg+xml,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)"/%3E%3C/svg%3E');
+  opacity: 0.05;
+  pointer-events: none;
+  animation: noise 0.2s infinite;
+  z-index: 9999;
+}
+
+@keyframes noise {
+  0% {
+    transform: translate(0, 0);
+  }
+
+  10% {
+    transform: translate(-5%, -5%);
+  }
+
+  20% {
+    transform: translate(-10%, 5%);
+  }
+
+  30% {
+    transform: translate(5%, -10%);
+  }
+
+  40% {
+    transform: translate(-5%, 15%);
+  }
+
+  50% {
+    transform: translate(-10%, 5%);
+  }
+
+  60% {
+    transform: translate(15%, 0);
+  }
+
+  70% {
+    transform: translate(0, 15%);
+  }
+
+  80% {
+    transform: translate(3%, 35%);
+  }
+
+  90% {
+    transform: translate(-10%, 10%);
+  }
+
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes data-scroll {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  100% {
+    transform: translate3d(0, -200px, 0);
+  }
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translate3d(20px, 0, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes expandBox {
+  from {
+    width: 0;
+    height: 0;
+    opacity: 0;
+  }
+
+  to {
+    width: 120px;
+    height: 160px;
+    opacity: 1;
+  }
+}
+
+@layer components {
+
+  /* Brutalist structural components */
+  .btn-structural {
+    @apply bg-transparent text-[var(--color-data)] border border-[var(--color-data)] rounded-none px-4 py-2 font-mono uppercase text-xs font-bold tracking-widest cursor-pointer transition-colors duration-[50ms];
+  }
+
+  .btn-structural:hover,
+  .btn-structural:focus {
+    @apply bg-[var(--color-data)] text-[var(--color-void)] outline-none;
+  }
+
+  .btn-alert {
+    @apply bg-[var(--color-alert)] text-[var(--color-void)] border border-[var(--color-alert)] rounded-none px-4 py-2 font-mono uppercase text-xs font-bold tracking-widest cursor-pointer transition-colors duration-[50ms];
+  }
+
+  .btn-alert:hover {
+    @apply bg-transparent text-[var(--color-alert)];
+  }
+
+  .data-container {
+    @apply bg-[var(--color-dim)] border border-[var(--color-iron)] rounded-none p-4;
+  }
+
+  .nav-border {
+    @apply border-b-[2px] border-[var(--color-iron)];
+  }
+
+  /* Scanlines and raw effects */
+  .terminal-overlay::before {
+    content: " ";
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    right: 0;
+    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.4) 50%);
+    z-index: 20;
+    background-size: 100% 4px;
+    pointer-events: none;
+  }
+
+  /* Extreme density lists */
+  .data-list {
+    @apply flex flex-col font-mono text-xs uppercase text-[var(--color-silica)];
+  }
+
+  .data-list-item {
+    @apply flex justify-between border-b border-[var(--color-iron)] py-2 transition-colors duration-100;
+  }
+
+  .animate-marquee {
+    animation: marquee 30s linear infinite;
+  }
+
+  .animate-marquee-slow {
+    animation: marquee 60s linear infinite;
+  }
+
+  .animate-data-scroll {
+    animation: data-scroll 8s linear infinite;
+    will-change: transform;
+  }
+}
+
+/* Force override of any lingering Tailwind rounded utilities */
+* {
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
