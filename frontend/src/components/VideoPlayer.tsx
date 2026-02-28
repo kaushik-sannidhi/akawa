@@ -37,13 +37,15 @@ export default function VideoPlayer({
     const [analyzing, setAnalyzing] = useState(true);
     const [progress, setProgress] = useState(0);
     const [analysisStatus, setAnalysisStatus] = useState("INITIALIZING...");
+    const [videoLoading, setVideoLoading] = useState(true);
+    const [videoError, setVideoError] = useState<string | null>(null);
     const detectionMapRef = useRef<FrameDetections[]>([]);
     const alertsFiredRef = useRef<Set<string>>(new Set());
 
     useEffect(() => {
         if (seekTrigger && videoRef.current) {
             videoRef.current.currentTime = seekTrigger.time;
-            videoRef.current.play();
+            videoRef.current.play().catch(err => console.error("Playback failed:", err));
         }
     }, [seekTrigger]);
 
@@ -56,6 +58,7 @@ export default function VideoPlayer({
         setAnalyzing(true);
         setProgress(0);
         setAnalysisStatus("CONNECTING TO ANALYSIS ENGINE...");
+        setVideoError(null);
 
         const runAnalysis = async () => {
             try {
@@ -63,6 +66,10 @@ export default function VideoPlayer({
                     `${getBaseUrl()}/api/analyze/${videoId}?uid=${encodeURIComponent(uid)}&model_id=${encodeURIComponent(modelId)}`,
                     { signal: abortController.signal }
                 );
+
+                if (!res.ok) {
+                    throw new Error(`ANALYSIS_FAILED (HTTP ${res.status})`);
+                }
 
                 const reader = res.body?.getReader();
                 if (!reader) return;
@@ -98,8 +105,6 @@ export default function VideoPlayer({
                                 );
                                 if (weapons.length > 0) {
                                     onAlertRef.current(weapons, payload.timestamp);
-
-                                    // Trigger clip generation
                                     captureClipForAlert(payload.timestamp);
                                 }
 
@@ -115,6 +120,7 @@ export default function VideoPlayer({
                 if (e.name !== "AbortError") {
                     console.error("Analysis stream error:", e);
                     setAnalysisStatus("ANALYSIS ERROR — RETRY UPLOAD");
+                    setVideoError("FORENSIC ANALYSIS ENGINE FAILED TO INITIALIZE. PLEASE RE-UPLOAD.");
                 }
             } finally {
                 setAnalyzing(false);
@@ -134,8 +140,6 @@ export default function VideoPlayer({
         if (Math.abs(timestamp - lastClipTimeRef.current) < 5) return;
         lastClipTimeRef.current = timestamp;
 
-        // Since we are running in the "pre-analysis" phase, the video might not be playing at `timestamp` right now.
-        // We will create a hidden offscreen video element just for recording this clip
         try {
             const hiddenVideo = document.createElement("video");
             hiddenVideo.crossOrigin = "anonymous";
@@ -163,7 +167,7 @@ export default function VideoPlayer({
             const ctx = renderCanvas.getContext("2d");
 
             // captureStream 15fps
-            const captureStream = renderCanvas.captureStream(15);
+            const captureStream = (renderCanvas as any).captureStream(15);
             const mediaRecorder = new MediaRecorder(captureStream, { mimeType: "video/webm" });
             const chunks: Blob[] = [];
 
@@ -317,7 +321,7 @@ export default function VideoPlayer({
         <div className="relative w-full aspect-video bg-black rounded overflow-hidden">
             {/* Analysis progress overlay */}
             {analyzing && (
-                <div className="absolute inset-0 z-30 bg-black/90 flex flex-col items-center justify-center gap-4 font-mono uppercase tracking-widest text-xs">
+                <div className="absolute inset-0 z-30 bg-black/95 flex flex-col items-center justify-center gap-4 font-mono uppercase tracking-widest text-xs">
                     <div className="w-2 h-2 bg-[var(--color-alert)] animate-pulse" />
                     <span className="text-[var(--color-data)] font-bold">{analysisStatus}</span>
                     <div className="w-64 h-2 bg-[var(--color-dim)] border border-[var(--color-iron)]">
@@ -332,12 +336,38 @@ export default function VideoPlayer({
                 </div>
             )}
 
+            {/* Video Loading / Error state */}
+            {(videoLoading || videoError) && !analyzing && (
+                <div className="absolute inset-0 z-20 bg-black/80 flex flex-col items-center justify-center gap-4 p-8 text-center">
+                    {videoError ? (
+                        <>
+                            <div className="w-8 h-8 flex items-center justify-center border-2 border-[var(--color-alert)] text-[var(--color-alert)] font-bold animate-pulse">!</div>
+                            <span className="text-[var(--color-alert)] text-[10px] font-bold uppercase tracking-tighter">
+                                [ FATAL_PLAYBACK_ERROR ]
+                                <br /> {videoError}
+                            </span>
+                        </>
+                    ) : (
+                        <>
+                            <div className="w-6 h-6 border-2 border-[var(--color-data)] border-t-transparent animate-spin rounded-full" />
+                            <span className="text-[var(--color-data)] text-[10px] uppercase font-bold">[ BUFFERING_FORENSIC_STREAM... ]</span>
+                        </>
+                    )}
+                </div>
+            )}
+
             <video
                 ref={videoRef}
                 src={`${getBaseUrl()}${videoUrl}`}
                 controls
                 className="w-full h-full object-contain"
                 crossOrigin="anonymous"
+                onLoadStart={() => setVideoLoading(true)}
+                onCanPlay={() => setVideoLoading(false)}
+                onError={() => {
+                    setVideoLoading(false);
+                    setVideoError("VIDEO BUFFER CORRUPTED OR UNSUPPORTED FORMAT.");
+                }}
             />
             <canvas
                 ref={canvasRef}

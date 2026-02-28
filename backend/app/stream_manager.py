@@ -8,14 +8,37 @@ import numpy as np
 import base64
 import os
 import requests
+from collections import deque
 from typing import Dict, List, Any, Set, Optional
 from fastapi import WebSocket
+
 logger = logging.getLogger(__name__)
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
 LIVE_EVENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "live_events")
 os.makedirs(LIVE_EVENTS_DIR, exist_ok=True)
 ALERT_CLIPS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "alert_clips")
 os.makedirs(ALERT_CLIPS_DIR, exist_ok=True)
+
+# How many frames to batch before calling the sequence API
+SEQUENCE_LENGTH = 20
+
+# ─── Detection helpers ────────────────────────────────────────────────────────
+# The new API returns detection_type: "person" | "weapon" | "fall" | "violent_person"
+# and a top-level threat_type: "none" | "weapon" | "fall" | "violence"
+
+THREAT_DETECTION_TYPES = {"weapon", "fall", "violent_person"}
+
+def _is_threat_detection(d: dict) -> bool:
+    return d.get("detection_type") in THREAT_DETECTION_TYPES
+
+def _is_weapon_detection(d: dict) -> bool:
+    return d.get("detection_type") == "weapon"
+
+def _is_fall_detection(d: dict) -> bool:
+    return d.get("detection_type") == "fall"
+
+def _is_violence_detection(d: dict) -> bool:
+    return d.get("detection_type") == "violent_person"
 
 
 class Stream:
@@ -33,28 +56,51 @@ class Stream:
 
         self.status = "starting"
         self.latest_detections = []
+        self.latest_threat_type: str = "none"   # top-level threat from last API response
         self.latest_frame_cv2 = None
-        self.latest_frame_b64: str = ""  # base64 JPEG for viewer broadcast
+        self.latest_frame_b64: str = ""
         self.last_alert_event_ts: int = 0
 
         # Cloudflare Realtime Kit meeting ID
         self.cf_meeting_id: str = ""
 
-        # Alert clipping: track ongoing alert window
+        # Rolling frame buffer for sequence batching (capped at SEQUENCE_LENGTH)
+        # Stores raw cv2 frames; the AI loop drains it when full.
+        self._frame_buffer: deque = deque(maxlen=SEQUENCE_LENGTH)
+
+        # Alert clipping
         self.alert_active: bool = False
         self.alert_start_ts: float = 0.0
         self.alert_end_ts: float = 0.0
-        self.alert_frames: list = []  # buffer of (timestamp, jpeg_bytes) during alert
+        self.alert_frames: list = []
 
-        # All viewers connect here for frame + detection JSON (legacy)
         self.viewer_wss: Set[WebSocket] = set()
-        # Detection-only WS subscribers (for CF Calls viewers)
         self.detection_wss: Set[WebSocket] = set()
 
         self._running = False
         self._ai_task = None
         self._capture_task = None
         self._broadcast_task = None
+
+    def push_frame(self, frame) -> bool:
+        """
+        Append a cv2 frame to the rolling buffer.
+        Returns True when the buffer is full and a sequence is ready to send.
+        """
+        self._frame_buffer.append(frame)
+        return len(self._frame_buffer) >= SEQUENCE_LENGTH
+
+    def drain_sequence(self) -> List:
+        """
+        Return the current buffer contents as a list and clear it.
+        Always returns SEQUENCE_LENGTH frames (padded with the last frame if needed).
+        """
+        frames = list(self._frame_buffer)
+        self._frame_buffer.clear()
+        # Pad if somehow short (shouldn't happen in normal flow)
+        while len(frames) < SEQUENCE_LENGTH:
+            frames.append(frames[-1] if frames else np.zeros((480, 640, 3), dtype=np.uint8))
+        return frames
 
     def to_dict(self):
         return {
@@ -100,13 +146,11 @@ class StreamManager:
             stream._running = True
             if not skip_ai:
                 stream._ai_task = asyncio.create_task(self._ai_loop(stream))
-            # Broadcast loop only needed for non-SFU viewers (legacy WS relay)
             stream._broadcast_task = asyncio.create_task(self._viewer_broadcast_loop(stream))
 
         return stream
 
     def ensure_ai_task(self, stream: Stream):
-        """Start the AI inference loop for a stream if not already running."""
         if stream._ai_task is None or stream._ai_task.done():
             stream._ai_task = asyncio.create_task(self._ai_loop(stream))
 
@@ -117,14 +161,10 @@ class StreamManager:
         stream = self.streams[stream_id]
         stream._running = False
 
-        if stream._ai_task:
-            stream._ai_task.cancel()
-        if stream._capture_task:
-            stream._capture_task.cancel()
-        if stream._broadcast_task:
-            stream._broadcast_task.cancel()
+        for task in [stream._ai_task, stream._capture_task, stream._broadcast_task]:
+            if task:
+                task.cancel()
 
-        # Cleanup Cloudflare Realtime Kit meeting
         if stream.cf_meeting_id:
             try:
                 from app.cloudflare_realtime import close_meeting
@@ -133,10 +173,8 @@ class StreamManager:
                 logger.error(f"Failed to close CF meeting {stream.cf_meeting_id}: {exc}")
 
         async def _safe_close(ws):
-            try:
-                await ws.close()
-            except Exception:
-                pass
+            try: await ws.close()
+            except Exception: pass
 
         for ws in list(stream.viewer_wss):
             await _safe_close(ws)
@@ -161,9 +199,8 @@ class StreamManager:
     def list_streams(self) -> List[Dict[str, Any]]:
         return [s.to_dict() for s in self.streams.values()]
 
-    # ---------------------------------------------- Server-side capture (RTSP / server_cam)
+    # ------------------------------------------ Server-side capture (RTSP / server_cam)
     async def _capture_and_broadcast_loop(self, stream: Stream):
-        """Capture frames for AI inference and broadcast to viewers for non-client streams."""
         source = stream.source
         if stream.type == "server_cam":
             try:
@@ -175,7 +212,7 @@ class StreamManager:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         while stream._running:
-            target_time = time.time() + 0.1  # ~10 FPS
+            target_time = time.time() + 0.1
             ret, frame = await asyncio.to_thread(cap.read)
 
             if not ret:
@@ -189,8 +226,9 @@ class StreamManager:
                 frame = cv2.resize(frame, (target_width, int(height * scale)))
 
             stream.latest_frame_cv2 = frame
+            # Also push into the sequence buffer so the AI loop picks it up
+            stream.push_frame(frame)
 
-            # Encode frame for viewer broadcast
             ret_enc, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
             if ret_enc:
                 b64_frame = base64.b64encode(buffer).decode("utf-8")
@@ -199,6 +237,7 @@ class StreamManager:
                     "type": "frame",
                     "frame": b64_frame,
                     "detections": stream.latest_detections,
+                    "threat_type": stream.latest_threat_type,
                     "timestamp": int(time.time() * 1000),
                 }
                 self._broadcast_text(stream, json.dumps(payload))
@@ -207,13 +246,8 @@ class StreamManager:
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
 
-    # ---------------------------------------------- Viewer broadcast (client_cam legacy)
+    # ------------------------------------------ Viewer broadcast (client_cam legacy)
     async def _viewer_broadcast_loop(self, stream: Stream):
-        """
-        Broadcast the latest frame + detections to legacy viewers at ~10 FPS.
-        For client_cam streams where frames arrive via WebSocket.
-        CF Calls viewers get video via SFU; they only need detection WS.
-        """
         while stream._running:
             try:
                 if stream.latest_frame_b64 and stream.viewer_wss:
@@ -221,82 +255,79 @@ class StreamManager:
                         "type": "frame",
                         "frame": stream.latest_frame_b64,
                         "detections": stream.latest_detections,
+                        "threat_type": stream.latest_threat_type,
                         "timestamp": int(time.time() * 1000),
                     }
                     self._broadcast_text(stream, json.dumps(payload))
-                await asyncio.sleep(0.2)  # ~5 FPS — lower bandwidth
+                await asyncio.sleep(0.2)
             except Exception as e:
                 logger.error(f"Viewer broadcast error: {e}")
                 await asyncio.sleep(0.5)
 
     # ------------------------------------------------------------------ AI loop
     async def _ai_loop(self, stream: Stream):
-        from main import proxy_fast_vision_frame
+        """
+        Collects frames into SEQUENCE_LENGTH batches, sends them to the
+        FastVision sequence endpoint, then broadcasts the result.
+
+        For client_cam streams: frames arrive via WebSocket and are pushed
+        into stream._frame_buffer externally (see push_frame()).
+        For rtsp/server_cam:    _capture_and_broadcast_loop pushes frames.
+        """
+        from main import proxy_fast_vision_sequence
         from app.telemetry import telemetry_service
 
         last_det_json: str = ""
-        last_frame_id: int = 0
 
         while stream._running:
             try:
-                frame = stream.latest_frame_cv2
-                if frame is None:
-                    await asyncio.sleep(0.05)
-                    continue
-
-                frame_id = id(frame)
-                if frame_id == last_frame_id:
+                # Wait until we have a full sequence ready
+                if len(stream._frame_buffer) < SEQUENCE_LENGTH:
                     await asyncio.sleep(0.02)
                     continue
-                last_frame_id = frame_id
+
+                frames = stream.drain_sequence()
 
                 t0 = time.time()
-                # 1. Weapon Detection (Modal)
-                detections = await asyncio.to_thread(
-                    proxy_fast_vision_frame, frame, source_type="live")
-
+                # Call sequence API — passes stream.id so the Modal backend
+                # can maintain per-stream optical flow state across batches.
+                result = await asyncio.to_thread(
+                    proxy_fast_vision_sequence,
+                    frames,
+                    stream.id,          # stream_id for server-side state
+                    source_type="live",
+                )
                 latency_ms = int((time.time() - t0) * 1000)
 
-                stream.latest_detections = detections
-                telemetry_service.log_frames(1, stream.uid)
-                telemetry_service.log_latency(latency_ms, stream.uid)
+                # result is the full FastVisionResponse dict from the new API
+                detections   = result.get("detections") or []
+                threat_type  = result.get("threat_type", "none")
+                has_threat   = threat_type != "none"
 
-                has_threat = any(d.get("is_weapon") for d in detections)
+                stream.latest_detections  = detections
+                stream.latest_threat_type = threat_type
+                # Keep latest_frame_cv2 as the last frame of the sequence
+                # so _persist_live_alert_event can snapshot it
+                stream.latest_frame_cv2   = frames[-1]
+
+                telemetry_service.log_frames(len(frames), stream.uid)
+                telemetry_service.log_latency(latency_ms, stream.uid)
 
                 if has_threat:
                     telemetry_service.log_anomaly(
                         f"NODE_WS_{stream.id[:6]}", stream.uid)
-                    from app.notifications import notification_manager
-                    
-                    # Group detections for notification
-                    weapon_det = next((d for d in detections if d.get("is_weapon") and d.get("class_name") != "fall"), None)
-                    fall_det = next((d for d in detections if d.get("class_name") == "fall"), None)
-                    
-                    if weapon_det:
-                        notification_manager.send_alert(
-                            uid=stream.uid,
-                            title=f"Threat Detected on Live Stream: {stream.name}",
-                            message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence.",
-                            class_name=weapon_det.get("class_name", "weapon"),
-                        )
-                    
-                    if fall_det:
-                        notification_manager.send_alert(
-                            uid=stream.uid,
-                            title=f"Fall Detected on Live Stream: {stream.name}",
-                            message=f"A possible fall was detected with {int(fall_det.get('confidence', 0) * 100)}% confidence.",
-                            class_name="fall",
-                        )
-                    
-                    self._persist_live_alert_event(stream, frame, detections)
+                    await self._handle_threat(stream, frames[-1], result)
 
-                # Track alert window for clip saving
-                self._track_alert_window(stream, has_threat, frame)
+                self._track_alert_window(stream, has_threat, frames[-1])
 
-                # Broadcast detection-only update to detection WS and legacy viewers
                 det_payload = json.dumps({
                     "type": "detections",
                     "detections": detections,
+                    "threat_type": threat_type,
+                    # Pass through model confidence values for frontend debug overlay
+                    "weapon_confidence": result.get("weapon_confidence", 0.0),
+                    "violence_confidence": result.get("violence_confidence", 0.0),
+                    "fall_confidence": result.get("fall_confidence", 0.0),
                     "timestamp": int(time.time() * 1000),
                 })
                 if det_payload != last_det_json or detections:
@@ -304,23 +335,68 @@ class StreamManager:
                     self._broadcast_detections(stream, det_payload)
 
             except Exception as e:
-                logger.error(f"AI Loop error: {e}")
+                logger.error(f"AI Loop error (stream {stream.id}): {e}")
                 await asyncio.sleep(1)
 
-    def _persist_live_alert_event(self, stream: Stream, frame, detections: List[Dict[str, Any]]):
-        """Persist alert evidence (snapshot + detection metadata)."""
+    async def _handle_threat(self, stream: Stream, frame, result: dict):
+        """
+        Route threat notifications based on threat_type.
+        Handles: weapon, fall, violence.
+        """
+        from app.notifications import notification_manager
+
+        threat_type        = result.get("threat_type", "none")
+        detections         = result.get("detections") or []
+        weapon_conf        = result.get("weapon_confidence", 0.0)
+        violence_conf      = result.get("violence_confidence", 0.0)
+        fall_conf          = result.get("fall_confidence", 0.0)
+
+        if threat_type == "weapon":
+            # Find the highest-confidence weapon detection for the message
+            weapon_dets = [d for d in detections if _is_weapon_detection(d)]
+            best = max(weapon_dets, key=lambda d: d.get("confidence", 0), default=None)
+            class_name = best.get("class_name", "weapon") if best else "weapon"
+            notification_manager.send_alert(
+                uid=stream.uid,
+                title=f"Weapon Detected — {stream.name}",
+                message=f"A {class_name.upper()} was detected with {int(weapon_conf * 100)}% confidence.",
+                class_name=class_name,
+            )
+
+        elif threat_type == "violence":
+            notification_manager.send_alert(
+                uid=stream.uid,
+                title=f"Violence Detected — {stream.name}",
+                message=f"A physical altercation was detected with {int(violence_conf * 100)}% confidence.",
+                class_name="violence",
+            )
+
+        elif threat_type == "fall":
+            notification_manager.send_alert(
+                uid=stream.uid,
+                title=f"Fall Detected — {stream.name}",
+                message=f"A possible fall was detected with {int(fall_conf * 100)}% confidence.",
+                class_name="fall",
+            )
+
+        self._persist_live_alert_event(stream, frame, detections, threat_type)
+
+    def _persist_live_alert_event(self, stream: Stream, frame,
+                                   detections: List[Dict[str, Any]],
+                                   threat_type: str = "weapon"):
+        """Persist alert evidence (snapshot + detection metadata) to Firebase."""
         now_ms = int(time.time() * 1000)
         if now_ms - stream.last_alert_event_ts < 2500:
             return
         stream.last_alert_event_ts = now_ms
 
-        weapon_dets = [d for d in detections if d.get("is_weapon")]
-        if not weapon_dets:
+        threat_dets = [d for d in detections if _is_threat_detection(d)]
+        if not threat_dets:
             return
 
         try:
             event_id = str(uuid.uuid4())
-            uid_dir = os.path.join(LIVE_EVENTS_DIR, stream.uid)
+            uid_dir  = os.path.join(LIVE_EVENTS_DIR, stream.uid)
             os.makedirs(uid_dir, exist_ok=True)
             image_name = f"{event_id}.jpg"
             image_path = os.path.join(uid_dir, image_name)
@@ -332,8 +408,9 @@ class StreamManager:
                 "stream_id": stream.id,
                 "stream_name": stream.name,
                 "timestamp": now_ms,
-                "classes": [d.get("class_name") for d in weapon_dets],
-                "top_confidence": max(float(d.get("confidence", 0.0)) for d in weapon_dets),
+                "threat_type": threat_type,
+                "classes": [d.get("class_name") for d in threat_dets],
+                "top_confidence": max(float(d.get("confidence", 0.0)) for d in threat_dets),
                 "detections": detections,
                 "snapshot_url": f"/live-events/{stream.uid}/{image_name}",
             }
@@ -346,36 +423,31 @@ class StreamManager:
         except Exception as exc:
             logger.error(f"Failed to persist live alert event for stream {stream.id}: {exc}")
 
-    # ---------------------------------------------------------- Alert window + clip saving
+    # ---------------------------------------------------------- Alert clipping
     def _track_alert_window(self, stream: Stream, has_threat: bool, frame=None):
-        """Track alert start/end and buffer frames during alerts for clip saving."""
         now = time.time()
 
         if has_threat:
             if not stream.alert_active:
-                stream.alert_active = True
+                stream.alert_active   = True
                 stream.alert_start_ts = now
-                stream.alert_frames = []
+                stream.alert_frames   = []
             stream.alert_end_ts = now
-            # Buffer the current frame as JPEG for clip
             if frame is not None:
                 try:
                     ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                     if ret:
                         stream.alert_frames.append((now, bytes(buf)))
-                    # Cap buffer at 300 frames (~30s at 10fps)
                     if len(stream.alert_frames) > 300:
                         stream.alert_frames = stream.alert_frames[-300:]
                 except Exception:
                     pass
         else:
             if stream.alert_active:
-                # Close after 5 seconds of no threat
                 if now - stream.alert_end_ts > 5.0:
                     stream.alert_active = False
                     self._save_alert_clip_local(stream)
                 elif frame is not None:
-                    # Still buffering trailing frames
                     try:
                         ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                         if ret:
@@ -384,66 +456,63 @@ class StreamManager:
                         pass
 
     def _save_alert_clip_local(self, stream: Stream):
-        """
-        Save an alert clip as a local MJPEG video from the buffered frames.
-        Persists metadata to Firebase for retrieval.
-        """
         if not stream.alert_frames or len(stream.alert_frames) < 3:
             stream.alert_frames = []
             return
 
         try:
             event_id = str(uuid.uuid4())
-            uid_dir = os.path.join(ALERT_CLIPS_DIR, stream.uid)
+            uid_dir  = os.path.join(ALERT_CLIPS_DIR, stream.uid)
             os.makedirs(uid_dir, exist_ok=True)
             clip_filename = f"{event_id}.avi"
-            clip_path = os.path.join(uid_dir, clip_filename)
+            clip_path     = os.path.join(uid_dir, clip_filename)
 
-            # Decode first frame to get dimensions
-            first_jpg = stream.alert_frames[0][1]
-            np_arr = np.frombuffer(first_jpg, np.uint8)
-            first_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            first_frame = cv2.imdecode(
+                np.frombuffer(stream.alert_frames[0][1], np.uint8), cv2.IMREAD_COLOR
+            )
             if first_frame is None:
                 stream.alert_frames = []
                 return
 
-            h, w = first_frame.shape[:2]
+            h, w     = first_frame.shape[:2]
             duration = stream.alert_end_ts - stream.alert_start_ts
-            fps = max(1, len(stream.alert_frames) / max(duration, 0.1))
+            fps      = max(1, len(stream.alert_frames) / max(duration, 0.1))
 
             fourcc = cv2.VideoWriter.fourcc(*"MJPG")
             writer = cv2.VideoWriter(clip_path, fourcc, min(fps, 15), (w, h))
-
             for _, jpg_bytes in stream.alert_frames:
-                np_arr = np.frombuffer(jpg_bytes, np.uint8)
-                frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                frame = cv2.imdecode(np.frombuffer(jpg_bytes, np.uint8), cv2.IMREAD_COLOR)
                 if frame is not None:
                     writer.write(frame)
             writer.release()
 
-            # Persist metadata to Firebase
             clip_info = {
                 "id": event_id,
                 "uid": stream.uid,
                 "stream_id": stream.id,
                 "stream_name": stream.name,
                 "type": "alert_clip",
+                "threat_type": stream.latest_threat_type,
                 "timestamp": int(stream.alert_start_ts * 1000),
                 "end_timestamp": int(stream.alert_end_ts * 1000),
                 "duration_seconds": round(duration, 1),
                 "frame_count": len(stream.alert_frames),
                 "clip_url": f"/alert-clips/{stream.uid}/{clip_filename}",
-                "detections_summary": stream.latest_detections[:5],
+                "detections_summary": [
+                    d for d in stream.latest_detections[:5]
+                    if _is_threat_detection(d)
+                ],
             }
-
             requests.put(
                 f"{FIREBASE_RTDB_BASE}/alert_clips/{stream.uid}/{event_id}.json",
                 json=clip_info,
                 timeout=4,
             )
-            logger.info(f"Saved alert clip {event_id} for stream {stream.id} "
-                       f"({round(duration, 1)}s, {len(stream.alert_frames)} frames)")
-
+            logger.info(
+                f"Saved alert clip {event_id} for stream {stream.id} "
+                f"({round(duration, 1)}s, {len(stream.alert_frames)} frames, "
+                f"threat={stream.latest_threat_type})"
+            )
         except Exception as exc:
             logger.error(f"Failed to save alert clip for stream {stream.id}: {exc}")
         finally:
@@ -451,22 +520,17 @@ class StreamManager:
 
     # ---------------------------------------------------------- Broadcast helpers
     def _broadcast_detections(self, stream: Stream, data_str: str):
-        """Send detection-only JSON to detection WS + legacy viewer WS."""
-        viewers = list(stream.detection_wss)
-        if viewers:
-            asyncio.create_task(self._send_all_text(viewers, data_str, stream.detection_wss))
-        legacy_viewers = list(stream.viewer_wss)
-        if legacy_viewers:
-            asyncio.create_task(self._send_all_text(legacy_viewers, data_str, stream.viewer_wss))
+        for ws_set in [stream.detection_wss, stream.viewer_wss]:
+            viewers = list(ws_set)
+            if viewers:
+                asyncio.create_task(self._send_all_text(viewers, data_str, ws_set))
 
     def _broadcast_text(self, stream: Stream, data_str: str):
-        """Send text JSON (detection results / frames) to all legacy viewers."""
         viewers = list(stream.viewer_wss)
         if viewers:
             asyncio.create_task(self._send_all_text(viewers, data_str, stream.viewer_wss))
 
     async def _send_all_text(self, viewers, data_str: str, wss_set: Set[WebSocket]):
-        """Batch-send text data to all viewers concurrently."""
         async def _one(ws: WebSocket):
             try:
                 await asyncio.wait_for(ws.send_text(data_str), timeout=1.0)

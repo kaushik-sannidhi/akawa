@@ -2,7 +2,8 @@
 Akawa Vision Threat Detection API — Modal Deployment
 
 Endpoint:
-  1. Qwen2VLModel — VLM-based deep visual analysis (4x A100 GPUs, PyTorch)
+  1. Qwen2VLModel  — VLM-based deep visual analysis (1x A100)
+  2. FastVisionAPI — YOLO weapon + Two-Stream violence + pose fall detection (1x A100)
 
 Deploy:  modal deploy akawa/backend/vision/modal_api.py
 Download weights once:  modal run akawa/backend/vision/modal_api.py::download_model
@@ -11,6 +12,7 @@ Download weights once:  modal run akawa/backend/vision/modal_api.py::download_mo
 import modal
 from pydantic import BaseModel
 from typing import Dict, List, Optional
+import math
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Modal App
@@ -20,8 +22,6 @@ app = modal.App("akawa-vlm-api")
 # ═══════════════════════════════════════════════════════════════════════════════
 # Fall Detection Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
-import math
-
 NOSE, L_EYE, R_EYE, L_EAR, R_EAR = 0, 1, 2, 3, 4
 L_SHOULDER, R_SHOULDER = 5, 6
 L_ELBOW, R_ELBOW = 7, 8
@@ -54,13 +54,14 @@ class EventTracker:
     def __init__(self, max_age=10):
         self.max_age = max_age
         self.events = []
-        
+
     def update(self, current_events):
         for e in self.events: e['age'] += 1
         for curr in current_events:
             matched = False
             for e in self.events:
-                if e['label'].split(' ')[1] == curr['label'].split(' ')[1] and bbox_iou(curr['box'], e['box']) > 0.3:
+                if (e['label'].split(' ')[1] == curr['label'].split(' ')[1]
+                        and bbox_iou(curr['box'], e['box']) > 0.3):
                     e['box'] = curr['box']
                     e['label'] = curr['label']
                     e['age'] = 0
@@ -70,15 +71,15 @@ class EventTracker:
                 curr['age'] = 0
                 self.events.append(curr)
         self.events = [e for e in self.events if e['age'] < self.max_age]
-        
+
     def get_active(self):
         return self.events
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# ENDPOINT — Qwen2-VL Deep Analysis (4x A100 GPUs)
+# ENDPOINT — Qwen2-VL Deep Analysis (1x A100 GPU)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── Image ────────────────────────────────────────────────────────────────────
 qwen2_vl_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
@@ -89,165 +90,117 @@ qwen2_vl_image = (
         "torchvision==0.19.0",
         "fastapi[standard]",
         "pydantic",
-        "pillow"
+        "pillow",
     )
 )
 
-# ── Volume for Qwen2-VL model weights ───────────────────────────────────────
 qwen2_vl_volume = modal.Volume.from_name("qwen2-vl-7b-weights", create_if_missing=True)
 QWEN2_VL_MODEL_DIR = "/model_cache"
 QWEN2_VL_MODEL_ID  = "Qwen/Qwen2-VL-7B-Instruct"
 
-# ── Helper: pre-download Qwen2-VL weights ───────────────────────────────────
 @app.function(image=qwen2_vl_image, volumes={QWEN2_VL_MODEL_DIR: qwen2_vl_volume}, timeout=7200)
 def download_model():
     from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
     import torch
-    
-    print(f"Downloading model {QWEN2_VL_MODEL_ID} to volume {QWEN2_VL_MODEL_DIR}...")
-    
-    # We download the fp16/bf16 weights. Due to 140GB size, this will take some time.
+    print(f"Downloading {QWEN2_VL_MODEL_ID} ...")
     AutoProcessor.from_pretrained(QWEN2_VL_MODEL_ID, cache_dir=QWEN2_VL_MODEL_DIR)
     Qwen2VLForConditionalGeneration.from_pretrained(
-        QWEN2_VL_MODEL_ID, 
-        device_map="auto", 
-        torch_dtype=torch.bfloat16, 
-        cache_dir=QWEN2_VL_MODEL_DIR
+        QWEN2_VL_MODEL_ID, device_map="auto",
+        torch_dtype=torch.bfloat16, cache_dir=QWEN2_VL_MODEL_DIR
     )
-    
-    print("Done downloading.")
+    print("Done.")
     qwen2_vl_volume.commit()
 
 
-# ── Pydantic schemas for the Qwen2-VL endpoint ──────────────────────────────
 class Qwen2VLRequest(BaseModel):
-    video_b64: str  # Base64 encoded video string (without data:video/mp4;base64, prefix)
+    video_b64: str
     video_name: Optional[str] = "unknown_video"
-    prompt: Optional[str] = "You are a specialized security analyst. Your goal is to provide a detailed, objective description of every person in the video and their exact physical actions. For each person, describe their clothing, appearance, and what they are doing to others or the environment. Focus on physical interactions: grappling, punching, grabbing, struggling, dragging, or protective stances. Describe exactly who is doing what to whom in high detail."
+    prompt: Optional[str] = (
+        "You are a specialized security analyst. Your goal is to provide a detailed, "
+        "objective description of every person in the video and their exact physical actions. "
+        "For each person, describe their clothing, appearance, and what they are doing to others "
+        "or the environment. Focus on physical interactions: grappling, punching, grabbing, "
+        "struggling, dragging, or protective stances. Describe exactly who is doing what to whom "
+        "in high detail."
+    )
 
 class Qwen2VLResponse(BaseModel):
     text: str
     error: Optional[str] = None
 
 
-# Require 1 A100 for the 7B model and keep 1 replica warm to avoid cold starts
 @app.cls(
-    image=qwen2_vl_image, 
-    gpu="A100", 
-    volumes={QWEN2_VL_MODEL_DIR: qwen2_vl_volume}, 
+    image=qwen2_vl_image,
+    gpu="A100",
+    volumes={QWEN2_VL_MODEL_DIR: qwen2_vl_volume},
     min_containers=1,
-    timeout=300
+    timeout=300,
 )
 class Qwen2VLModel:
-    """
-    Qwen2-VL-7B-Instruct for deep visual reasoning.
-    Runs on 1x A100 GPU constantly warm.
-    """
-
     @modal.enter()
     def load_model(self):
         import torch
         from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-        
-        print("Loading Qwen2-VL-7B model on 1x A100 GPU...")
+        print("Loading Qwen2-VL-7B ...")
         self.processor = AutoProcessor.from_pretrained(QWEN2_VL_MODEL_ID, cache_dir=QWEN2_VL_MODEL_DIR)
-        
-        # Load the model directly to the GPU.
         self.model = Qwen2VLForConditionalGeneration.from_pretrained(
-            QWEN2_VL_MODEL_ID,
-            device_map="auto",
-            torch_dtype=torch.bfloat16,
-            cache_dir=QWEN2_VL_MODEL_DIR,
+            QWEN2_VL_MODEL_ID, device_map="auto",
+            torch_dtype=torch.bfloat16, cache_dir=QWEN2_VL_MODEL_DIR,
         )
         self.model.eval()
-        print("Qwen2-VL model loaded successfully.")
+        print("Qwen2-VL loaded.")
 
     @modal.fastapi_endpoint(method="POST", docs=True)
     def analyze(self, req: Qwen2VLRequest) -> Qwen2VLResponse:
-        import base64
-        import torch
-        import traceback
-        import tempfile
-        import os
+        import base64, torch, traceback, tempfile, os, logging
         from qwen_vl_utils import process_vision_info
-        import logging
 
-        logging.basicConfig(level=logging.INFO)
         logger = logging.getLogger("qwen2_vl")
-        
+        logging.basicConfig(level=logging.INFO)
         video_name = req.video_name or "unknown_video"
-        logger.info(f"[VLM] Starting analysis for video: {video_name}")
-
         temp_video_path = None
         try:
-            # Decode the base64 video
             video_bytes = base64.b64decode(req.video_b64)
-            
-            # Write to a temporary file
             fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
             with os.fdopen(fd, 'wb') as f:
                 f.write(video_bytes)
 
-            # Prepare the conversation
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "video",
-                            "video": temp_video_path,
-                            "max_pixels": 250880,
-                            "fps": 5.0,
-                        },
-                        {"type": "text", "text": req.prompt},
-                    ],
-                }
-            ]
-
-            # Use processor to format for Qwen2-VL
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "video", "video": temp_video_path,
+                     "max_pixels": 250880, "fps": 5.0},
+                    {"type": "text", "text": req.prompt},
+                ],
+            }]
             text = self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
             image_inputs, video_inputs = process_vision_info(messages)
-            
             inputs = self.processor(
-                text=[text],
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                return_tensors="pt",
+                text=[text], images=image_inputs, videos=video_inputs,
+                padding=True, return_tensors="pt",
             ).to(self.model.device)
 
-            # Generate output
             with torch.no_grad():
                 generated_ids = self.model.generate(**inputs, max_new_tokens=500)
-
-            # Trim the prompt from the output
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            
+            trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
             output_text = self.processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+                trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )[0]
-
-            logger.info(f"[VLM] Analysis complete for {video_name}. Detection snippet: {output_text.strip()[:100]}...")
             return Qwen2VLResponse(text=output_text.strip())
 
         except Exception as e:
-            logger.error(f"[VLM] Error analyzing {video_name}: {str(e)}")
             traceback.print_exc()
             return Qwen2VLResponse(text="", error=str(e))
-            
         finally:
             if temp_video_path and os.path.exists(temp_video_path):
-                try:
-                    os.remove(temp_video_path)
-                except Exception:
-                    pass
+                try: os.remove(temp_video_path)
+                except: pass
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ENDPOINT — Fast Vision (Weapon + Violence Detection on T4 GPU)
+# ENDPOINT — Fast Vision (Weapon + Violence + Fall Detection)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 fast_vision_image = (
@@ -261,49 +214,108 @@ fast_vision_image = (
         "pydantic",
         "pillow",
         "numpy",
-        "torch>=2.0.0" # ultralytics needs torch
+        "torch>=2.0.0",
     )
-    .add_local_dir(
-        "backend/vision/models",
-        remote_path="/root/models"
-    )
+    .add_local_dir("backend/vision/models", remote_path="/root/models")
 )
 
+# ── Weapon classes ──────────────────────────────────────────────────────────
+WEAPON_CLASSES = {"gun", "knife", "weapon"}
+
+# ── How many sampled frames must contain a weapon to suppress brawl model ──
+# e.g. 0.25 means weapon found in ≥25% of sampled frames → skip brawl
+WEAPON_DOMINANCE_RATIO = 0.25
+
+# ── Thresholds ──────────────────────────────────────────────────────────────
+WEAPON_CONF_THRESH   = 0.45   # YOLO box confidence for a weapon hit
+WEAPON_ALERT_THRESH  = 0.50   # max_weapon_conf to declare weapons_detected
+BRAWL_ALERT_THRESH   = 0.60   # brawl model probability to declare violence
+FALL_CONFIRM_THRESH  = 0.50   # fall judge confidence
+PERSON_DETECT_CONF   = 0.40   # pose model person confidence
+
+
+# ── Schemas ──────────────────────────────────────────────────────────────────
 class FastVisionRequest(BaseModel):
+    # Live sequence path (primary use-case)
+    frame_sequence_b64: Optional[List[str]] = None
+
+    # Single-frame WebSocket path
+    frame_b64: Optional[str] = None
+
+    # Full video upload path
     video_b64: Optional[str] = None
-    frame_b64: Optional[str] = None # For single frame websocket
-    frame_sequence_b64: Optional[List[str]] = None # For TwoStream sequences
+
     video_name: Optional[str] = "live_stream"
-    source_type: Optional[str] = "live" # "live" or "upload"
+    source_type: Optional[str] = "live"   # "live" | "upload"
+
+    # Per-stream identifier — critical for multi-camera deployments.
+    # The backend uses this to persist the last frame's grayscale between
+    # batches so optical flow is continuous across batch boundaries.
+    stream_id: Optional[str] = "default"
 
 
 class Detection(BaseModel):
-    bbox: List[float] # [x1, y1, x2, y2]
+    bbox: List[float]           # normalised [x1, y1, x2, y2]
     confidence: float
     class_name: str
-    is_weapon: bool
+    detection_type: str         # "person" | "weapon" | "fall" | "violent_person"
+
 
 class FastVisionResponse(BaseModel):
+    # Top-level flags
     weapons_detected: bool
     weapon_confidence: float
     violence_detected: bool
     violence_confidence: float
     fall_detected: bool = False
     fall_confidence: float = 0.0
-    detections: Optional[List[Detection]] = None # Bounding boxes for single frame
-    sequence_violence_confidence: Optional[float] = None
+
+    # Single summary field the UI can use for alert colour / icon
+    # Priority: weapon > fall > violence > none
+    threat_type: str = "none"   # "none" | "weapon" | "violence" | "fall"
+
+    # Per-frame bounding boxes (always populated — persons even when no threat)
+    detections: Optional[List[Detection]] = None
+
+    # Raw brawl model output (useful for debugging thresholds)
+    raw_brawl_confidence: Optional[float] = None
+
     error: Optional[str] = None
+
+
+# ── Optical-flow helper ──────────────────────────────────────────────────────
+def _compute_optical_flow(prev_gray, curr_gray):
+    import cv2
+    flow = cv2.calcOpticalFlowFarneback(
+        prev_gray, curr_gray, None,
+        pyr_scale=0.5, levels=3, winsize=15,
+        iterations=5, poly_n=5, poly_sigma=1.1, flags=0,
+    )
+    return flow
+
 
 @app.cls(
     image=fast_vision_image,
-    gpu="A100", # T4 or L4 is enough for YOLO + TwoStream
+    gpu="A100",
     min_containers=1,
-    timeout=300
+    timeout=300,
 )
 class FastVisionAPI:
     """
-    Fast Vision API that quickly identifies weapons (YOLO) and brawling/violence (Two-Stream).
-    Runs on 1x T4 GPU constantly warm.
+    Threat detection pipeline:
+      1. YOLO weapon scan — runs on every other frame in the sequence.
+         If weapon found in ≥WEAPON_DOMINANCE_RATIO of scanned frames
+         → skip brawl model entirely (motion from weapon-wielding looks
+           identical to a brawl to a CNN).
+      2. Two-Stream brawl model — only runs when no weapon dominance.
+      3. YOLO-pose fall detection — always runs on the last frame.
+      4. Person bboxes — always returned from pose so the UI shows
+         the model is working even during quiet footage.
+
+    Per-stream state (keyed by stream_id):
+      - prev_gray: last grayscale frame from the previous batch, so
+        optical flow is continuous across batch boundaries.
+      - event_tracker: per-stream fall tracker.
     """
 
     @modal.enter()
@@ -313,39 +325,44 @@ class FastVisionAPI:
         from ultralytics import YOLO
         import ultralytics.nn.tasks
         import os
-        
-        print("Loading Fast Vision Models...")
-        
-        # Patch for PyTorch 2.6 weights_only=True default breaking Ultralytics loads
+
+        print("Loading Fast Vision models ...")
+
         try:
             torch.serialization.add_safe_globals([ultralytics.nn.tasks.DetectionModel])
         except AttributeError:
-            pass # Older PyTorch versions don't need this
-        
-        # Load YOLO Weapon model
+            pass
+
         self.weapon_model = YOLO('/root/models/weapon.pt')
-        
-        # Load Two-Stream Violence model
-        self.brawl_model = tf.keras.models.load_model('/root/models/brawl_model.keras')
-        
-        # Load Fall Detection model (radar/pose) and Fall Judge
-        self.pose_model = YOLO('/root/models/yolo11m-pose.pt')
+        self.brawl_model  = tf.keras.models.load_model('/root/models/brawl_model.keras')
+        self.pose_model   = YOLO('/root/models/yolo11m-pose.pt')
+
         self.fall_judge = None
         if os.path.exists('/root/models/fall_best.pt'):
             self.fall_judge = YOLO('/root/models/fall_best.pt')
-            
-        self.FALL_SPINE_ANGLE_DEG = 45
-        self.FALL_HEAD_ANKLE_FRAC = 0.15
-        self.JUDGE_CONFIRM_THRESH = 0.50
-        self.tracker = EventTracker(max_age=10)
-        
-        print("Fast Vision Models loaded successfully.")
 
+        # Per-stream state: stream_id → {"prev_gray": ndarray|None, "tracker": EventTracker}
+        self._stream_state: dict = {}
+
+        self.FALL_SPINE_ANGLE_DEG  = 45
+        self.FALL_HEAD_ANKLE_FRAC  = 0.15
+        print("Fast Vision models loaded.")
+
+    # ── Per-stream state helpers ─────────────────────────────────────────────
+    def _get_stream_state(self, stream_id: str) -> dict:
+        if stream_id not in self._stream_state:
+            self._stream_state[stream_id] = {
+                "prev_gray": None,
+                "tracker": EventTracker(max_age=10),
+            }
+        return self._stream_state[stream_id]
+
+    # ── Fall detection helpers ───────────────────────────────────────────────
     def _check_suspicion(self, kps, bbox):
         ls, rs = kp_xy(kps, L_SHOULDER), kp_xy(kps, R_SHOULDER)
-        lh, rh = kp_xy(kps, L_HIP), kp_xy(kps, R_HIP)
-        neck = ((ls[0]+rs[0])/2, (ls[1]+rs[1])/2) if (ls and rs) else None
-        mhip = ((lh[0]+rh[0])/2, (lh[1]+rh[1])/2) if (lh and rh) else None
+        lh, rh = kp_xy(kps, L_HIP),      kp_xy(kps, R_HIP)
+        neck  = ((ls[0]+rs[0])/2, (ls[1]+rs[1])/2) if (ls and rs) else None
+        mhip  = ((lh[0]+rh[0])/2, (lh[1]+rh[1])/2) if (lh and rh) else None
 
         sp_angle = angle_deg(neck, mhip)
         if sp_angle is not None and sp_angle < self.FALL_SPINE_ANGLE_DEG:
@@ -360,165 +377,332 @@ class FastVisionAPI:
         return False, ""
 
     def _run_judge(self, frame, bbox):
+        import cv2
         x1, y1, x2, y2 = bbox
         h, w = frame.shape[:2]
         pad = 20
-        x1, y1 = max(0, int(x1 - pad)), max(0, int(y1 - pad))
-        x2, y2 = min(w, int(x2 + pad)), min(h, int(y2 + pad))
+        x1, y1 = max(0, int(x1-pad)), max(0, int(y1-pad))
+        x2, y2 = min(w, int(x2+pad)), min(h, int(y2+pad))
         crop = frame[y1:y2, x1:x2]
         if crop is None or crop.size == 0: return False, 0.0
-
-        results = self.fall_judge.predict(source=crop, conf=self.JUDGE_CONFIRM_THRESH, verbose=False)
+        results = self.fall_judge.predict(source=crop, conf=FALL_CONFIRM_THRESH, verbose=False)
         if results[0].boxes is not None and len(results[0].boxes) > 0:
             best_conf = float(results[0].boxes.conf.max())
-            return best_conf >= self.JUDGE_CONFIRM_THRESH, best_conf
+            return best_conf >= FALL_CONFIRM_THRESH, best_conf
         return False, 0.0
 
+    # ── Shared weapon scanning ───────────────────────────────────────────────
+    def _scan_weapons(self, frames, frame_height: int, frame_width: int):
+        """
+        Run weapon YOLO on every other frame.
+        Returns (max_weapon_conf, weapon_hit_ratio, weapon_detections[]).
+        weapon_detections contains normalised Detection objects for the frames
+        where a weapon was found.
+        """
+        import numpy as np
+
+        class_names = (self.weapon_model.names
+                       if hasattr(self.weapon_model, "names")
+                       else getattr(self.weapon_model.model, "names",
+                                    {0: "person", 1: "gun", 2: "knife"}))
+
+        weapon_confidences = []
+        weapon_detections  = []
+        scanned = 0
+
+        for i, frame in enumerate(frames):
+            if i % 2 != 0:
+                continue
+            scanned += 1
+            h, w = frame.shape[:2]
+            results = self.weapon_model(frame, verbose=False)
+            for r in results:
+                for j in range(len(r.boxes)):
+                    cls_id    = int(r.boxes.cls[j].item())
+                    conf      = float(r.boxes.conf[j].item())
+                    class_name = (class_names[cls_id]
+                                  if isinstance(class_names, dict)
+                                  else (class_names[cls_id]
+                                        if cls_id < len(class_names)
+                                        else f"class_{cls_id}"))
+                    is_weapon = class_name in WEAPON_CLASSES
+                    if not is_weapon or conf < WEAPON_CONF_THRESH:
+                        continue
+
+                    weapon_confidences.append(conf)
+
+                    # Normalise bbox
+                    if hasattr(r.boxes, "xyxyn"):
+                        xyxyn = r.boxes.xyxyn[j].tolist()
+                    else:
+                        raw = r.boxes.xyxy[j].tolist()
+                        xyxyn = [raw[0]/w, raw[1]/h, raw[2]/w, raw[3]/h]
+
+                    weapon_detections.append(Detection(
+                        bbox=xyxyn,
+                        confidence=conf,
+                        class_name=class_name,
+                        detection_type="weapon",
+                    ))
+
+        max_conf  = max(weapon_confidences) if weapon_confidences else 0.0
+        hit_ratio = len(weapon_confidences) / max(scanned, 1)
+        return max_conf, hit_ratio, weapon_detections
+
+    # ── Shared pose / fall / person bbox extraction ──────────────────────────
+    def _run_pose(self, frame, tracker: EventTracker):
+        """
+        Returns (fall_detected, max_fall_conf, person_detections[], fall_detections[]).
+        person_detections always contains every detected person.
+        """
+        h, w = frame.shape[:2]
+        person_detections = []
+        fall_detections   = []
+        fall_detected     = False
+        max_fall_conf     = 0.0
+
+        pose_results = self.pose_model(frame, verbose=False, imgsz=640, conf=PERSON_DETECT_CONF)
+        res = pose_results[0]
+
+        if res.boxes is None or len(res.boxes) == 0:
+            tracker.update([])
+            return fall_detected, max_fall_conf, person_detections, fall_detections
+
+        boxes_xyxy = [[int(v) for v in b.tolist()] for b in res.boxes.xyxy]
+        keypoints_list = []
+        if res.keypoints is not None and res.keypoints.data is not None:
+            for kp_tensor in res.keypoints.data:
+                keypoints_list.append(kp_tensor.cpu().numpy())
+        else:
+            keypoints_list = [None] * len(boxes_xyxy)
+
+        current_events = []
+        for idx, (bbox, kps) in enumerate(zip(boxes_xyxy, keypoints_list)):
+            # Always add person bbox
+            xyxyn = [bbox[0]/w, bbox[1]/h, bbox[2]/w, bbox[3]/h]
+            person_detections.append(Detection(
+                bbox=xyxyn,
+                confidence=float(res.boxes.conf[idx].item()),
+                class_name="person",
+                detection_type="person",
+            ))
+
+            # Fall check
+            suspicious, reason = self._check_suspicion(kps, bbox)
+            if suspicious:
+                confirmed, conf_val = False, 0.85
+                if self.fall_judge:
+                    confirmed, conf_val = self._run_judge(frame, bbox)
+                else:
+                    confirmed = True
+                if confirmed:
+                    label = f"🚨 CONFIRMED FALL {conf_val:.2f}"
+                    current_events.append({'box': bbox, 'label': label})
+
+        tracker.update(current_events)
+
+        for ev in tracker.get_active():
+            b = ev['box']
+            xyxyn = [b[0]/w, b[1]/h, b[2]/w, b[3]/h]
+            conf = 0.85
+            try: conf = float(ev['label'].split(' ')[-1])
+            except: pass
+            fall_detections.append(Detection(
+                bbox=xyxyn,
+                confidence=conf,
+                class_name="fall",
+                detection_type="fall",
+            ))
+            fall_detected = True
+            max_fall_conf = max(max_fall_conf, conf)
+
+        return fall_detected, max_fall_conf, person_detections, fall_detections
+
+    # ── Main endpoint ────────────────────────────────────────────────────────
     @modal.fastapi_endpoint(method="POST", docs=True)
     def analyze(self, req: FastVisionRequest) -> FastVisionResponse:
-        import base64
-        import cv2
-        import numpy as np
-        import tempfile
-        import os
-        import traceback
-        import logging
+        import base64, cv2, numpy as np, traceback, tempfile, os, logging
 
         logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger("fast_vision")
-        
-        video_name = req.video_name or "live_stream"
-        source_type = req.source_type or "live"
-        logger.info(f"[FastVision] Analyzing {video_name} (Source: {source_type})")
+        logger     = logging.getLogger("fast_vision")
+        video_name = req.video_name  or "live_stream"
+        stream_id  = req.stream_id   or "default"
+        state      = self._get_stream_state(stream_id)
 
+        logger.info(f"[FastVision] stream={stream_id} src={req.source_type} video={video_name}")
 
-        # --- Single Frame Processing (WebSockets) ---
-        if req.frame_b64:
+        # ════════════════════════════════════════════════════════════════════
+        # PATH A — Frame sequence (primary live path, 20 frames from frontend)
+        # ════════════════════════════════════════════════════════════════════
+        if req.frame_sequence_b64:
             try:
-                # Decode single frame
+                # 1. Decode frames
+                frames = []
+                for encoded in req.frame_sequence_b64:
+                    if "," in encoded:
+                        encoded = encoded.split(",", 1)[1]
+                    img_data = base64.b64decode(encoded)
+                    nparr    = np.frombuffer(img_data, np.uint8)
+                    f        = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    if f is not None:
+                        frames.append(f)
+
+                if not frames:
+                    return FastVisionResponse(
+                        weapons_detected=False, weapon_confidence=0.0,
+                        violence_detected=False, violence_confidence=0.0,
+                        error="No decodable frames received",
+                    )
+
+                IMG_SIZE = (84, 84)
+                SEQ_LEN  = 20
+
+                # ── 2. Weapon scan across the whole sequence ─────────────
+                # We scan every other frame (10 samples from a 20-frame batch).
+                # If weapon found in ≥WEAPON_DOMINANCE_RATIO of those samples
+                # we skip the brawl model entirely — fast motion from wielding
+                # a weapon is indistinguishable from a brawl to the CNN.
+                max_weapon_conf, weapon_hit_ratio, weapon_detections = \
+                    self._scan_weapons(frames, *frames[0].shape[:2])
+
+                weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
+                weapon_dominant  = weapon_hit_ratio >= WEAPON_DOMINANCE_RATIO
+
+                # ── 3. Pose / fall / person bboxes on last frame ─────────
+                fall_detected, max_fall_conf, person_detections, fall_detections = \
+                    self._run_pose(frames[-1], state["tracker"])
+
+                # ── 4. Brawl model — only when weapon is NOT dominant ────
+                #
+                # Why gate it?  The Two-Stream model sees optical flow
+                # magnitudes.  A person walking briskly while carrying a
+                # weapon produces large, directed flow that scores high for
+                # "brawl".  Once we know a weapon is consistently present,
+                # the motion signal is irrelevant — the weapon IS the threat.
+                violence_detected   = False
+                violence_confidence = 0.0
+                raw_brawl_conf      = None
+
+                if not weapon_dominant:
+                    frame_buffer = []
+                    # Seed optical flow with the last frame saved from the
+                    # previous batch (if any), so flow is continuous.
+                    prev_gray = state["prev_gray"]
+
+                    for frame in frames[:SEQ_LEN]:
+                        resized = cv2.resize(frame, IMG_SIZE)
+                        rgb     = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB
+                                               ).astype(np.float32) / 255.0
+                        gray    = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+                        if prev_gray is None:
+                            flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+                        else:
+                            flow = _compute_optical_flow(prev_gray, gray)
+                            flow = np.clip(flow / 20.0, -1.0, 1.0)
+                        prev_gray = gray
+
+                        stacked = np.concatenate([rgb, flow], axis=-1)
+                        frame_buffer.append(stacked)
+
+                    # Pad if fewer than SEQ_LEN frames arrived
+                    while len(frame_buffer) < SEQ_LEN:
+                        frame_buffer.append(frame_buffer[-1]
+                                            if frame_buffer
+                                            else np.zeros((*IMG_SIZE, 5), dtype=np.float32))
+
+                    sequence = np.expand_dims(
+                        np.array(frame_buffer[-SEQ_LEN:], dtype=np.float32), axis=0
+                    )  # (1, 20, 84, 84, 5)
+                    raw_brawl_conf      = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
+                    violence_detected   = raw_brawl_conf > BRAWL_ALERT_THRESH
+                    violence_confidence = raw_brawl_conf
+
+                # Save last frame grayscale for next batch continuity
+                last_resized       = cv2.resize(frames[-1], IMG_SIZE)
+                state["prev_gray"] = cv2.cvtColor(last_resized, cv2.COLOR_BGR2GRAY)
+
+                # ── 5. Threat priority ────────────────────────────────────
+                # weapon > fall > violence > none
+                # (Fall can coexist with a weapon; violence is moot if weapon present)
+                if weapons_detected:
+                    threat_type = "weapon"
+                elif fall_detected:
+                    threat_type = "fall"
+                elif violence_detected:
+                    threat_type = "violence"
+                    # Upgrade person markers to violent_person for UI colouring
+                    for d in person_detections:
+                        d.detection_type = "violent_person"
+                else:
+                    threat_type = "none"
+
+                all_detections = person_detections + weapon_detections + fall_detections
+
+                if threat_type != "none":
+                    logger.info(
+                        f"[FastVision] ALERT stream={stream_id} "
+                        f"threat={threat_type} "
+                        f"weapon={max_weapon_conf:.2f}(ratio={weapon_hit_ratio:.2f}) "
+                        f"brawl={raw_brawl_conf} "
+                        f"fall={max_fall_conf:.2f}"
+                    )
+
+                return FastVisionResponse(
+                    weapons_detected=weapons_detected,
+                    weapon_confidence=max_weapon_conf,
+                    violence_detected=violence_detected,
+                    violence_confidence=violence_confidence,
+                    fall_detected=fall_detected,
+                    fall_confidence=max_fall_conf,
+                    threat_type=threat_type,
+                    detections=all_detections,
+                    raw_brawl_conf=raw_brawl_conf,
+                )
+
+            except Exception as e:
+                traceback.print_exc()
+                return FastVisionResponse(
+                    weapons_detected=False, weapon_confidence=0.0,
+                    violence_detected=False, violence_confidence=0.0,
+                    error=str(e),
+                )
+
+        # ════════════════════════════════════════════════════════════════════
+        # PATH B — Single frame (WebSocket, no violence model)
+        # ════════════════════════════════════════════════════════════════════
+        elif req.frame_b64:
+            try:
                 encoded = req.frame_b64
                 if "," in encoded:
                     encoded = encoded.split(",", 1)[1]
-                
                 img_data = base64.b64decode(encoded)
-                nparr = np.frombuffer(img_data, np.uint8)
-                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                
+                nparr    = np.frombuffer(img_data, np.uint8)
+                frame    = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
                 if frame is None:
-                    return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error="Invalid image data")
+                    return FastVisionResponse(
+                        weapons_detected=False, weapon_confidence=0.0,
+                        violence_detected=False, violence_confidence=0.0,
+                        error="Invalid image data",
+                    )
 
-                # YOLO Weapon Detection
-                results = self.weapon_model(frame, verbose=False)
-                
-                weapon_confidences = []
-                detections = []
-                
-                # Default weapons (Simplified per user request)
-                WEAPON_CLASSES = ["gun", "knife"]
-                
-                if hasattr(self.weapon_model, "names"):
-                    class_names = self.weapon_model.names
-                else:
-                    # Explicit mapping: 0=person, 1=gun, 2=knife
-                    class_names = getattr(self.weapon_model.model, "names", {0: "person", 1: "gun", 2: "knife"})
-                
-                for r in results:
-                    boxes = r.boxes
-                    for i in range(len(boxes)):
-                        cls_id = int(boxes.cls[i].item())
-                        conf = float(boxes.conf[i].item())
-                        
-                        # Handle varied YOLO versions
-                        xyxyn = boxes.xyxyn[i].tolist() if hasattr(boxes, "xyxyn") else boxes.xyxy[i].tolist() # fallback
+                max_weapon_conf, _, weapon_detections = \
+                    self._scan_weapons([frame], *frame.shape[:2])
+                weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
 
-                        # Normalize back if fallback used raw pixels
-                        if not hasattr(boxes, "xyxyn") and len(xyxyn) == 4 and (xyxyn[2] > 1 or xyxyn[3] > 1):
-                            h, w = frame.shape[:2]
-                            xyxyn = [xyxyn[0]/w, xyxyn[1]/h, xyxyn[2]/w, xyxyn[3]/h]
-                            
-                        class_name = class_names[cls_id] if isinstance(class_names, dict) else (class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}")
-                        is_weapon = class_name in WEAPON_CLASSES or class_name == "weapon"
-                        
-                        if is_weapon:
-                            weapon_confidences.append(conf)
-                            
-                        detections.append(Detection(
-                            bbox=xyxyn,
-                            confidence=conf,
-                            class_name=class_name,
-                            is_weapon=is_weapon
-                        ))
-                
-                max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
-                weapons_detected = max_weapon_conf > 0.5
-                
-                # Fall Detection (Pose)
-                fall_detected = False
-                max_fall_conf = 0.0
-                pose_results = self.pose_model(frame, verbose=False, imgsz=640, conf=0.40)
-                res = pose_results[0]
-                
-                if res.boxes is not None and len(res.boxes) > 0:
-                    boxes_xyxy = [[int(v) for v in b.tolist()] for b in res.boxes.xyxy]
-                    keypoints_list = []
-                    if res.keypoints is not None and res.keypoints.data is not None:
-                        for kp_tensor in res.keypoints.data:
-                            keypoints_list.append(kp_tensor.cpu().numpy())
-                    else:
-                        keypoints_list = [None] * len(boxes_xyxy)
-                        
-                    current_events = []
-                    for idx, (bbox, kps) in enumerate(zip(boxes_xyxy, keypoints_list)):
-                        suspicious, reason = self._check_suspicion(kps, bbox)
-                        if suspicious:
-                            confirmed = False
-                            conf_val = 0.85 # default if no judge
-                            if self.fall_judge:
-                                confirmed, conf_val = self._run_judge(frame, bbox)
-                            else:
-                                confirmed = True
-                            
-                            if confirmed:
-                                label = f"🚨 CONFIRMED FALL {conf_val:.2f}"
-                                current_events.append({'box': bbox, 'label': label})
-                        
-                        # Always include person detection for overlay (even if not suspicious)
-                        h_p, w_p = frame.shape[:2]
-                        xyxyn_p = [bbox[0]/w_p, bbox[1]/h_p, bbox[2]/w_p, bbox[3]/h_p]
-                        detections.append(Detection(
-                            bbox=xyxyn_p,
-                            confidence=float(res.boxes.conf[idx].item()),
-                            class_name="person",
-                            is_weapon=False
-                        ))
-                    
-                    self.tracker.update(current_events)
-                    
-                    h, w = frame.shape[:2]
-                    for ev in self.tracker.get_active():
-                        b = ev['box']
-                        xyxyn = [b[0]/w, b[1]/h, b[2]/w, b[3]/h]
-                        conf = 0.85
-                        try: conf = float(ev['label'].split(' ')[-1])
-                        except: pass
-                        
-                        detections.append(Detection(
-                            bbox=xyxyn,
-                            confidence=conf,
-                            class_name="fall",
-                            is_weapon=True # To trigger UI alerts
-                        ))
-                        fall_detected = True
-                        if conf > max_fall_conf:
-                            max_fall_conf = conf
-                else:
-                    self.tracker.update([])
-                
+                fall_detected, max_fall_conf, person_detections, fall_detections = \
+                    self._run_pose(frame, state["tracker"])
+
                 if weapons_detected:
-                    logger.info(f"[FastVision] Frame Detection: WEAPON DETECTED in {video_name} (conf: {max_weapon_conf:.2f})")
-                if fall_detected:
-                    logger.info(f"[FastVision] Frame Detection: FALL DETECTED in {video_name} (conf: {max_fall_conf:.2f})")
-                
+                    threat_type = "weapon"
+                elif fall_detected:
+                    threat_type = "fall"
+                else:
+                    threat_type = "none"
+
+                all_detections = person_detections + weapon_detections + fall_detections
+
                 return FastVisionResponse(
                     weapons_detected=weapons_detected,
                     weapon_confidence=max_weapon_conf,
@@ -526,272 +710,139 @@ class FastVisionAPI:
                     violence_confidence=0.0,
                     fall_detected=fall_detected,
                     fall_confidence=max_fall_conf,
-                    detections=detections
+                    threat_type=threat_type,
+                    detections=all_detections,
                 )
-                
+
             except Exception as e:
                 traceback.print_exc()
-                return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error=str(e))
-                
-        # --- Frame Sequence Processing (TwoStream batch) ---
-        elif req.frame_sequence_b64:
-             try:
-                 # Reconstruct 5-channel optical flow batches from frames
-                 # Note: Requires optical flow logic or pre-computed flow.
-                 # For simplicity, if we pass exactly 20 frames, we can compute flow on the fly
-                 frames = []
-                 for encoded in req.frame_sequence_b64:
-                     if "," in encoded: encoded = encoded.split(",", 1)[1]
-                     img_data = base64.b64decode(encoded)
-                     nparr = np.frombuffer(img_data, np.uint8)
-                     f = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                     if f is not None: frames.append(f)
-                 
-                 if len(frames) < 2:
-                     return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error="Need at least 2 frames for flow")
-                 
-                 IMG_SIZE = (84, 84)
-                 SEQ_LEN = 20
-                 frame_buffer = []
-                 prev_gray = None
-                 
-                 def compute_optical_flow(prev, curr):
-                    flow = cv2.calcOpticalFlowFarneback(
-                        prev, curr, None, 
-                        pyr_scale=0.5, levels=3, winsize=15, 
-                        iterations=5, poly_n=5, poly_sigma=1.1, flags=0
-                    )
-                    return flow
+                return FastVisionResponse(
+                    weapons_detected=False, weapon_confidence=0.0,
+                    violence_detected=False, violence_confidence=0.0,
+                    error=str(e),
+                )
 
-                 for frame in frames[:SEQ_LEN]: # Process up to SEQ_LEN
-                     resized_frame = cv2.resize(frame, IMG_SIZE)
-                     rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                     gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
-                     
-                     if prev_gray is None:
-                         flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
-                     else:
-                         flow = compute_optical_flow(prev_gray, gray)
-                         flow = np.clip(flow / 20.0, -1.0, 1.0)
-                     prev_gray = gray
-                     
-                     stacked_5c = np.concatenate([rgb, flow], axis=-1)
-                     frame_buffer.append(stacked_5c)
-                     
-                 # Pad if needed, though client should send exactly SEQ_LEN
-                 while len(frame_buffer) < SEQ_LEN:
-                     frame_buffer.append(frame_buffer[-1] if frame_buffer else np.zeros((*IMG_SIZE, 5), dtype=np.float32))
-                     
-                 # 1. Run Weapon Model on the last frame to emphasize weapon
-                 last_frame = frames[-1]
-                 weapon_results = self.weapon_model(last_frame, verbose=False)
-                 
-                 WEAPON_CLASSES = ["gun", "knife"]
-                 if hasattr(self.weapon_model, "names"):
-                     class_names = self.weapon_model.names
-                 else:
-                     class_names = getattr(self.weapon_model.model, "names", {0: "person", 1: "gun", 2: "knife"})
-                 
-                 weapon_confidences = []
-                 for r in weapon_results:
-                     boxes = r.boxes
-                     for i in range(len(boxes)):
-                         cls_id = int(boxes.cls[i].item())
-                         class_name = class_names[cls_id] if isinstance(class_names, dict) else (class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}")
-                         is_weapon = class_name in WEAPON_CLASSES or class_name == "weapon"
-                         if is_weapon:
-                             weapon_confidences.append(float(boxes.conf[i].item()))
-                 
-                 max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
-                 weapons_detected = max_weapon_conf > 0.5
-
-                 # 2. Run Violence/Brawl Model
-                 sequence = np.array(frame_buffer[-SEQ_LEN:], dtype=np.float32)
-                 sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
-                 prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
-                 
-                 violence_detected = prob > 0.6
-                 max_brawl_conf = prob
-                 
-                 # Emphasize weapon: if weapon is detected, it should not be classified as violence
-                 if weapons_detected:
-                     violence_detected = False
-                     max_brawl_conf = 0.0
-                     logger.info(f"[FastVision] Sequence Detection: WEAPON DETECTED in {video_name} (conf: {max_weapon_conf:.2f}), suppressing violence.")
-                 elif violence_detected:
-                     logger.info(f"[FastVision] Sequence Detection: VIOLENCE DETECTED in {video_name} (conf: {prob:.2f})")
-
-                 return FastVisionResponse(
-                      weapons_detected=weapons_detected, weapon_confidence=max_weapon_conf,
-                      violence_detected=violence_detected, violence_confidence=max_brawl_conf,
-                      fall_detected=False, fall_confidence=0.0,
-                      sequence_violence_confidence=prob
-                 )
-             except Exception as e:
-                 traceback.print_exc()
-                 return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error=str(e))
-
-        # --- Full Video Processing (Existing logic) ---
-        # --- Full Video Processing (Existing logic) ---
+        # ════════════════════════════════════════════════════════════════════
+        # PATH C — Full video upload
+        # ════════════════════════════════════════════════════════════════════
         elif req.video_b64:
             temp_video_path = None
             try:
-                # Decode the base64 video
                 video_bytes = base64.b64decode(req.video_b64)
-                
-                # Write to a temporary file
                 fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
                 with os.fdopen(fd, 'wb') as f:
                     f.write(video_bytes)
 
                 cap = cv2.VideoCapture(temp_video_path)
-                
-                # Configuration
-                SEQ_LEN = 20
-                IMG_SIZE = (84, 84)
-                
-                frame_buffer = []
-                prev_gray = None
-                
-                brawl_confidences = []
+                IMG_SIZE, SEQ_LEN = (84, 84), 20
+
+                frame_buffer       = []
+                prev_gray          = None
+                brawl_confidences  = []
                 weapon_confidences = []
-                fall_confidences = []
-                
-                def compute_optical_flow(prev, curr):
-                    flow = cv2.calcOpticalFlowFarneback(
-                        prev, curr, None, 
-                        pyr_scale=0.5, levels=3, winsize=15, 
-                        iterations=5, poly_n=5, poly_sigma=1.1, flags=0
-                    )
-                    return flow
-                
-                frame_count = 0
+                fall_confidences   = []
+                all_weapon_dets    = []
+                all_person_dets    = []
+                all_fall_dets      = []
+                frame_count        = 0
+
+                upload_tracker = EventTracker(max_age=10)
+
                 while True:
                     ret, frame = cap.read()
-                    if not ret:
-                        break
-                        
+                    if not ret: break
                     frame_count += 1
-                    
-                    # --- 1. Weapon Detection (YOLO) ---
-                    # Run weapon detection on every 5th frame to save compute
+
+                    # Weapon + pose every 5th frame
                     if frame_count % 5 == 0:
-                        results = self.weapon_model(frame, verbose=False)
-                        for r in results:
-                            # Check confidence of detections
-                            if len(r.boxes.conf) > 0:
-                                max_conf = float(r.boxes.conf.max().cpu().numpy())
-                                weapon_confidences.append(max_conf)
-                                
-                    # --- 2. Fall Detection (Pose) ---
-                    if frame_count % 5 == 0:
-                        pose_results = self.pose_model(frame, verbose=False, imgsz=640, conf=0.40)
-                        res = pose_results[0]
-                        
-                        if res.boxes is not None and len(res.boxes) > 0:
-                            boxes_xyxy = [[int(v) for v in b.tolist()] for b in res.boxes.xyxy]
-                            keypoints_list = []
-                            if res.keypoints is not None and res.keypoints.data is not None:
-                                for kp_tensor in res.keypoints.data:
-                                    keypoints_list.append(kp_tensor.cpu().numpy())
-                            else:
-                                keypoints_list = [None] * len(boxes_xyxy)
-                                
-                            current_events = []
-                            for idx, (bbox, kps) in enumerate(zip(boxes_xyxy, keypoints_list)):
-                                suspicious, reason = self._check_suspicion(kps, bbox)
-                                if suspicious:
-                                    confirmed = False
-                                    conf_val = 0.85
-                                    if self.fall_judge:
-                                        confirmed, conf_val = self._run_judge(frame, bbox)
-                                    else:
-                                        confirmed = True
-                                        
-                                    if confirmed:
-                                        label = f"🚨 CONFIRMED FALL {conf_val:.2f}"
-                                        current_events.append({'box': bbox, 'label': label})
-                            self.tracker.update(current_events)
-                            for ev in self.tracker.get_active():
-                                conf = 0.85
-                                try: conf = float(ev['label'].split(' ')[-1])
-                                except: pass
-                                fall_confidences.append(conf)
-                        else:
-                            self.tracker.update([])
-                    
-                    # --- 2. Violence Detection (Two-Stream) ---
-                    resized_frame = cv2.resize(frame, IMG_SIZE)
-                    rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                    gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
-                    
-                    if prev_gray is None:
-                        flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
-                    else:
-                        flow = compute_optical_flow(prev_gray, gray)
-                        flow = np.clip(flow / 20.0, -1.0, 1.0)
-                        
+                        _, _, w_dets = self._scan_weapons([frame], *frame.shape[:2])
+                        for d in w_dets:
+                            weapon_confidences.append(d.confidence)
+                            all_weapon_dets.append(d)
+
+                        fd2, fc2, p_dets, fall_dets = self._run_pose(frame, upload_tracker)
+                        all_person_dets.extend(p_dets)
+                        all_fall_dets.extend(fall_dets)
+                        if fd2: fall_confidences.extend([d.confidence for d in fall_dets])
+
+                    # Two-Stream sliding window
+                    resized = cv2.resize(frame, IMG_SIZE)
+                    rgb     = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                    gray    = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+                    flow = (np.zeros((*IMG_SIZE, 2), dtype=np.float32) if prev_gray is None
+                            else np.clip(_compute_optical_flow(prev_gray, gray) / 20.0, -1.0, 1.0))
                     prev_gray = gray
-                    
-                    stacked_5c = np.concatenate([rgb, flow], axis=-1)
-                    frame_buffer.append(stacked_5c)
-                    
-                    # Keep sliding window of size SEQ_LEN
+
+                    frame_buffer.append(np.concatenate([rgb, flow], axis=-1))
                     if len(frame_buffer) > SEQ_LEN:
                         frame_buffer.pop(0)
-                    
+
                     if len(frame_buffer) == SEQ_LEN:
-                        sequence = np.array(frame_buffer, dtype=np.float32)
-                        sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
+                        sequence = np.expand_dims(
+                            np.array(frame_buffer, dtype=np.float32), axis=0
+                        )
                         prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
                         brawl_confidences.append(prob)
 
                 cap.release()
-                
-                # Aggregation logic
+
                 max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
-                weapons_detected = max_weapon_conf > 0.5 # Threshold for weapon
-                
-                max_fall_conf = max(fall_confidences) if fall_confidences else 0.0
-                fall_detected = max_fall_conf > 0.5
-                
-                max_brawl_conf = max(brawl_confidences) if brawl_confidences else 0.0
-                violence_detected = max_brawl_conf > 0.6 # Threshold from test script
+                max_fall_conf   = max(fall_confidences)   if fall_confidences   else 0.0
+                max_brawl_conf  = max(brawl_confidences)  if brawl_confidences  else 0.0
 
-                # Emphasize weapon: a gun/knife shouldn't be classified as violence
+                # Same weapon-dominance gate for full video
+                weapon_hit_ratio = len(weapon_confidences) / max((frame_count // 5), 1)
+                weapon_dominant  = weapon_hit_ratio >= WEAPON_DOMINANCE_RATIO
+
+                weapons_detected  = max_weapon_conf >= WEAPON_ALERT_THRESH
+                fall_detected     = max_fall_conf   >  FALL_CONFIRM_THRESH
+                violence_detected = (not weapon_dominant) and (max_brawl_conf > BRAWL_ALERT_THRESH)
+
                 if weapons_detected:
-                    violence_detected = False
-                    max_brawl_conf = 0.0
-
-                if weapons_detected or violence_detected or fall_detected:
-                    logger.info(f"[FastVision] Video Analysis: ALERT for {video_name} - Weapon: {weapons_detected} ({max_weapon_conf:.2f}), Violence: {violence_detected} ({max_brawl_conf:.2f}), Fall: {fall_detected} ({max_fall_conf:.2f})")
+                    threat_type = "weapon"
+                elif fall_detected:
+                    threat_type = "fall"
+                elif violence_detected:
+                    threat_type = "violence"
                 else:
-                    logger.info(f"[FastVision] Video Analysis: No threats detected in {video_name}")
+                    threat_type = "none"
+
+                all_detections = all_person_dets + all_weapon_dets + all_fall_dets
+
+                logger.info(
+                    f"[FastVision] Upload {video_name}: threat={threat_type} "
+                    f"weapon={max_weapon_conf:.2f} brawl={max_brawl_conf:.2f} "
+                    f"fall={max_fall_conf:.2f}"
+                )
 
                 return FastVisionResponse(
                     weapons_detected=weapons_detected,
                     weapon_confidence=max_weapon_conf,
                     violence_detected=violence_detected,
-                    violence_confidence=max_brawl_conf,
+                    violence_confidence=max_brawl_conf if not weapon_dominant else 0.0,
                     fall_detected=fall_detected,
-                    fall_confidence=max_fall_conf
+                    fall_confidence=max_fall_conf,
+                    threat_type=threat_type,
+                    detections=all_detections,
+                    raw_brawl_conf=max_brawl_conf,
                 )
 
             except Exception as e:
                 traceback.print_exc()
                 return FastVisionResponse(
-                    weapons_detected=False,
-                    weapon_confidence=0.0,
-                    violence_detected=False,
-                    violence_confidence=0.0,
-                    fall_detected=False,
-                    fall_confidence=0.0,
-                    error=str(e)
+                    weapons_detected=False, weapon_confidence=0.0,
+                    violence_detected=False, violence_confidence=0.0,
+                    error=str(e),
                 )
-            
             finally:
                 if temp_video_path and os.path.exists(temp_video_path):
-                    try:
-                        os.remove(temp_video_path)
-                    except Exception:
-                        pass
+                    try: os.remove(temp_video_path)
+                    except: pass
+
+        # ── No valid input ────────────────────────────────────────────────
+        return FastVisionResponse(
+            weapons_detected=False, weapon_confidence=0.0,
+            violence_detected=False, violence_confidence=0.0,
+            error="No input provided (frame_b64, frame_sequence_b64, or video_b64 required)",
+        )

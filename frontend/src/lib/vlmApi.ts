@@ -1,3 +1,5 @@
+import { getBaseUrl } from "./config";
+
 export interface VLMAnalysisRequest {
     videoBlob: Blob;
     prompt?: string;
@@ -8,12 +10,10 @@ export interface VLMAnalysisResponse {
     error?: string;
 }
 
-const MODAL_ENDPOINT = "https://apat7--akawa-vlm-api-qwen2vlmodel-analyze.modal.run";
-
 /**
- * Sends a video blob to the Modal Qwen2-VL endpoint for analysis.
- * Converts the Blob to a base64 string, strips the data URL prefix,
- * and sends it as JSON.
+ * Sends a video blob to the backend VLM proxy (/api/vlm/analyze),
+ * which forwards it to the Modal Qwen2-VL endpoint.
+ * This keeps all external AI requests server-side for logging and telemetry.
  */
 export async function analyzeVideoWithVLM({ videoBlob, prompt }: VLMAnalysisRequest): Promise<VLMAnalysisResponse> {
     try {
@@ -24,16 +24,15 @@ export async function analyzeVideoWithVLM({ videoBlob, prompt }: VLMAnalysisRequ
                 .reduce((data, byte) => data + String.fromCharCode(byte), '')
         );
 
-        // Prepare payload according to Qwen2VLRequest schema
         const payload: any = {
             video_b64: base64String
         };
-        
+
         if (prompt) {
             payload.prompt = prompt;
         }
 
-        const response = await fetch(MODAL_ENDPOINT, {
+        const response = await fetch(`${getBaseUrl()}/api/vlm/analyze`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

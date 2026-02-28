@@ -66,8 +66,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
             const y1 = (b.y1 ?? b[1]) * dh;
             const x2 = (b.x2 ?? b[2]) * dw;
             const y2 = (b.y2 ?? b[3]) * dh;
-            const isWeapon = ["gun", "knife", "violence"].includes(det.class_name);
-            const color = isWeapon ? "#FF3300" : "#FFFFFF";
+            const isThreat = ["gun", "violence", "fall"].includes(det.class_name);
+            const isKnife = det.class_name === "knife";
+
+            let color = "#FFFFFF"; // Default/Person (White)
+            if (isThreat) color = "#FF3300"; // Serious Threat (Red)
+            else if (isKnife) color = "#FFFF00"; // Knife (Yellow)
+
             const corner = Math.max(6, 10 * scale);
 
             ctx.strokeStyle = color;

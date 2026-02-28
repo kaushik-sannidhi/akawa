@@ -1,60 +1,68 @@
 """
 Cloudflare Realtime Kit — Meetings & Participants API + TURN credentials.
 
-Uses the Cloudflare Realtime Kit API (built on Dyte) for WebRTC live
-streaming via their global SFU network.  Each "stream" maps to a
-Realtime Kit "meeting".  Publishers and viewers join as participants
-and receive auth tokens that the frontend SDK consumes.
-
 Env vars required:
     CF_ACCOUNT_ID      – Cloudflare account ID
-    CF_REALTIME_APP_ID – Realtime Kit App ID (from Cloudflare dashboard → Calls → Realtime Kit)
-    CF_REALTIME_TOKEN  – Cloudflare API token with "Realtime" or "Realtime Admin" permission
-    CF_TURN_KEY_ID     – (optional) Cloudflare TURN key ID for extra NAT traversal
+    CF_REALTIME_APP_ID – Realtime Kit App ID
+    CF_REALTIME_TOKEN  – Cloudflare API token (Realtime / Realtime Admin permission)
+    CF_TURN_KEY_ID     – (optional) Cloudflare TURN key ID
     CF_TURN_API_TOKEN  – (optional) Cloudflare TURN API token
 """
 
 import os
+import time
 import logging
 import requests
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "")
-CF_REALTIME_APP_ID = os.getenv("CF_REALTIME_APP_ID", "")
-CF_REALTIME_TOKEN = os.getenv("CF_REALTIME_TOKEN", "")
-CF_TURN_KEY_ID = os.getenv("CF_TURN_KEY_ID", "")
-CF_TURN_API_TOKEN = os.getenv("CF_TURN_API_TOKEN", "")
-
-_BASE = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/realtime/kit/{CF_REALTIME_APP_ID}"
-
-
-def _headers():
+# ── Env vars read lazily so Docker/Railway env injection works correctly ──────
+def _env() -> Dict[str, str]:
     return {
-        "Authorization": f"Bearer {CF_REALTIME_TOKEN}",
+        "account_id":  os.getenv("CF_ACCOUNT_ID", ""),
+        "app_id":      os.getenv("CF_REALTIME_APP_ID", ""),
+        "token":       os.getenv("CF_REALTIME_TOKEN", ""),
+        "turn_key_id": os.getenv("CF_TURN_KEY_ID", ""),
+        "turn_token":  os.getenv("CF_TURN_API_TOKEN", ""),
+    }
+
+def _base() -> str:
+    e = _env()
+    return (f"https://api.cloudflare.com/client/v4/accounts/{e['account_id']}"
+            f"/realtime/kit/{e['app_id']}")
+
+def _headers() -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {_env()['token']}",
         "Content-Type": "application/json",
     }
 
-
 def is_configured() -> bool:
-    return bool(CF_ACCOUNT_ID and CF_REALTIME_APP_ID and CF_REALTIME_TOKEN)
+    e = _env()
+    return bool(e["account_id"] and e["app_id"] and e["token"])
 
 
-# ────────────────────────────────────── Meetings ──────────────────────────────
+# ── TURN credential cache — valid 24h, refresh 30 min before expiry ───────────
+_turn_cache: Dict[str, Any] = {}   # {"ice_servers": [...], "expires_at": float}
+_TURN_TTL_SECONDS = 3600           # 1-hour TTL — sufficient for any session
+_TURN_REFRESH_BUFFER = 300         # refresh 5 min before expiry
+
+
+# ─────────────────────────────────────── Meetings ────────────────────────────
 
 def create_meeting(title: str) -> Optional[Dict[str, Any]]:
     """
     Create a Realtime Kit meeting.
-    Returns { "meeting_id": ..., "title": ..., ... } or None.
+    Returns {"meeting_id": ..., "title": ...} or None.
     """
     if not is_configured():
-        logger.warning("Cloudflare Realtime Kit not configured.")
+        logger.warning("Cloudflare Realtime Kit not configured — skipping create_meeting.")
         return None
 
     try:
         resp = requests.post(
-            f"{_BASE}/meetings",
+            f"{_base()}/meetings",
             json={"title": title},
             headers=_headers(),
             timeout=10,
@@ -63,11 +71,8 @@ def create_meeting(title: str) -> Optional[Dict[str, Any]]:
             body = resp.json()
             if body.get("success"):
                 data = body["data"]
-                logger.info(f"Created Realtime Kit meeting {data['id']} — {title}")
-                return {
-                    "meeting_id": data["id"],
-                    "title": data.get("title", title),
-                }
+                logger.info(f"Created CF meeting {data['id']} — {title}")
+                return {"meeting_id": data["id"], "title": data.get("title", title)}
         logger.error(f"create_meeting failed: {resp.status_code} {resp.text[:400]}")
         return None
     except Exception as exc:
@@ -75,56 +80,81 @@ def create_meeting(title: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def close_meeting(meeting_id: str) -> bool:
+def close_meeting(meeting_id: str, retries: int = 2) -> bool:
     """
-    Kick all participants from a meeting (effectively closes it).
+    Kick all participants from a meeting.
+    Retries up to `retries` times on network failure so the meeting
+    doesn't stay open on Cloudflare's side after local cleanup.
     """
     if not is_configured() or not meeting_id:
         return False
-    try:
-        resp = requests.post(
-            f"{_BASE}/meetings/{meeting_id}/active-session/kick-all",
-            json={},
-            headers=_headers(),
-            timeout=10,
-        )
-        ok = resp.status_code in (200, 201, 204)
-        if ok:
-            logger.info(f"Closed meeting {meeting_id}")
-        return ok
-    except Exception as exc:
-        logger.error(f"close_meeting exception: {exc}")
-        return False
+
+    for attempt in range(1, retries + 2):  # retries+1 total attempts
+        try:
+            resp = requests.post(
+                f"{_base()}/meetings/{meeting_id}/active-session/kick-all",
+                json={},
+                headers=_headers(),
+                timeout=10,
+            )
+            if resp.status_code in (200, 201, 204):
+                logger.info(f"Closed CF meeting {meeting_id} (attempt {attempt})")
+                return True
+            # 404 means meeting is already gone — treat as success
+            if resp.status_code == 404:
+                logger.info(f"CF meeting {meeting_id} already closed (404)")
+                return True
+            logger.warning(
+                f"close_meeting attempt {attempt} failed: "
+                f"{resp.status_code} {resp.text[:200]}"
+            )
+        except Exception as exc:
+            logger.error(f"close_meeting attempt {attempt} exception: {exc}")
+
+        if attempt <= retries:
+            time.sleep(attempt)  # simple backoff: 1s, 2s
+
+    logger.error(
+        f"close_meeting failed after {retries + 1} attempts for meeting {meeting_id}. "
+        f"Meeting may still be open on Cloudflare — manual cleanup may be required."
+    )
+    return False
 
 
-# ─────────────────────────────────── Participants ─────────────────────────────
+# ──────────────────────────────────── Participants ────────────────────────────
+
+# Preset names in Realtime Kit
+_PRESET_PUBLISHER = "group_call_host"       # publish + subscribe
+_PRESET_VIEWER    = "group_call_participant" # subscribe only — no publish permission
+
 
 def add_participant(
     meeting_id: str,
     participant_id: str,
     name: str = "participant",
-    preset: str = "group_call_host",
+    role: str = "viewer",           # "publisher" | "viewer"
 ) -> Optional[Dict[str, Any]]:
     """
-    Add a participant to a meeting and get their auth token.
-    The token is passed to the frontend SDK for joining.
+    Add a participant and return their auth token for the frontend SDK.
 
-    preset="group_call_host" gives publish+subscribe permissions.
+    role="publisher"  → group_call_host    (publish + subscribe)
+    role="viewer"     → group_call_participant (subscribe only)
 
-    Returns { "participant_id": ..., "token": ... } or None.
+    Using the correct role ensures viewers can't accidentally publish a feed.
     """
     if not is_configured() or not meeting_id:
         return None
 
+    preset = _PRESET_PUBLISHER if role == "publisher" else _PRESET_VIEWER
+
     try:
-        payload = {
-            "custom_participant_id": participant_id,
-            "name": name,
-            "preset_name": preset,
-        }
         resp = requests.post(
-            f"{_BASE}/meetings/{meeting_id}/participants",
-            json=payload,
+            f"{_base()}/meetings/{meeting_id}/participants",
+            json={
+                "custom_participant_id": participant_id,
+                "name": name,
+                "preset_name": preset,
+            },
             headers=_headers(),
             timeout=10,
         )
@@ -132,11 +162,14 @@ def add_participant(
             body = resp.json()
             if body.get("success"):
                 data = body["data"]
-                logger.info(f"Added participant {data['id']} to meeting {meeting_id}")
+                logger.info(
+                    f"Added {role} {data['id']} to meeting {meeting_id}"
+                )
                 return {
                     "participant_id": data["id"],
                     "token": data["token"],
                     "custom_participant_id": data.get("custom_participant_id", participant_id),
+                    "role": role,
                 }
         logger.error(f"add_participant failed: {resp.status_code} {resp.text[:400]}")
         return None
@@ -146,12 +179,12 @@ def add_participant(
 
 
 def remove_participant(meeting_id: str, participant_id: str) -> bool:
-    """Remove / kick a participant from a meeting."""
+    """Kick a single participant from a meeting."""
     if not is_configured() or not meeting_id or not participant_id:
         return False
     try:
         resp = requests.delete(
-            f"{_BASE}/meetings/{meeting_id}/participants/{participant_id}",
+            f"{_base()}/meetings/{meeting_id}/participants/{participant_id}",
             headers=_headers(),
             timeout=10,
         )
@@ -161,48 +194,70 @@ def remove_participant(meeting_id: str, participant_id: str) -> bool:
         return False
 
 
-# ────────────────────────────────── TURN credentials ──────────────────────────
+# ─────────────────────────────────── TURN credentials ────────────────────────
 
 def get_turn_credentials() -> Dict[str, Any]:
     """
-    Fetch short-lived TURN credentials from Cloudflare.
-    Falls back to STUN-only if TURN is not configured.
-    """
-    if CF_TURN_KEY_ID and CF_TURN_API_TOKEN:
-        try:
-            resp = requests.post(
-                f"https://rtc.live.cloudflare.com/v1/turn/keys/{CF_TURN_KEY_ID}/credentials/generate",
-                json={"ttl": 86400},
-                headers={
-                    "Authorization": f"Bearer {CF_TURN_API_TOKEN}",
-                    "Content-Type": "application/json",
-                },
-                timeout=10,
-            )
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                ice = data.get("iceServers", {})
-                username = ice.get("username", "")
-                credential = ice.get("credential", "")
-                if username and credential:
-                    return {
-                        "iceServers": [
-                            {"urls": "stun:stun.cloudflare.com:3478"},
-                            {
-                                "urls": [
-                                    "turn:turn.cloudflare.com:3478?transport=udp",
-                                    "turn:turn.cloudflare.com:3478?transport=tcp",
-                                    "turns:turn.cloudflare.com:5349?transport=tcp",
-                                ],
-                                "username": username,
-                                "credential": credential,
-                            },
-                        ]
-                    }
-            logger.warning(f"TURN credential request failed: {resp.status_code}")
-        except Exception as exc:
-            logger.error(f"TURN credential exception: {exc}")
+    Return ICE server config for WebRTC.
 
+    Credentials are cached for _TURN_TTL_SECONDS and reused across all
+    viewer joins — avoids hammering the TURN API on concurrent joins.
+    Falls back to STUN-only if TURN is unconfigured or the API call fails.
+    """
+    global _turn_cache
+
+    e = _env()
+    if not (e["turn_key_id"] and e["turn_token"]):
+        return _stun_only()
+
+    # Return cached credentials if still fresh
+    now = time.time()
+    if _turn_cache and _turn_cache.get("expires_at", 0) - now > _TURN_REFRESH_BUFFER:
+        return {"iceServers": _turn_cache["ice_servers"]}
+
+    # Fetch new credentials
+    try:
+        resp = requests.post(
+            f"https://rtc.live.cloudflare.com/v1/turn/keys/{e['turn_key_id']}/credentials/generate",
+            json={"ttl": _TURN_TTL_SECONDS},
+            headers={
+                "Authorization": f"Bearer {e['turn_token']}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            ice = resp.json().get("iceServers", {})
+            username   = ice.get("username", "")
+            credential = ice.get("credential", "")
+            if username and credential:
+                servers = [
+                    {"urls": "stun:stun.cloudflare.com:3478"},
+                    {
+                        "urls": [
+                            "turn:turn.cloudflare.com:3478?transport=udp",
+                            "turn:turn.cloudflare.com:3478?transport=tcp",
+                            "turns:turn.cloudflare.com:5349?transport=tcp",
+                        ],
+                        "username": username,
+                        "credential": credential,
+                    },
+                ]
+                _turn_cache = {
+                    "ice_servers": servers,
+                    "expires_at": now + _TURN_TTL_SECONDS,
+                }
+                logger.info("Refreshed Cloudflare TURN credentials (cached for 1h)")
+                return {"iceServers": servers}
+
+        logger.warning(f"TURN credential request failed: {resp.status_code} — falling back to STUN")
+    except Exception as exc:
+        logger.error(f"TURN credential exception: {exc} — falling back to STUN")
+
+    return _stun_only()
+
+
+def _stun_only() -> Dict[str, Any]:
     return {
         "iceServers": [
             {"urls": "stun:stun.cloudflare.com:3478"},
