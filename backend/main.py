@@ -2,6 +2,7 @@ import os
 import uuid
 import cv2
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +17,18 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Weapon Detection API")
+
+@asynccontextmanager
+async def lifespan(app):
+    # ── Startup ──
+    print("[STARTUP] Restoring streams from Firebase...")
+    _restore_streams_from_firebase()
+    print("[STARTUP] Ready to proxy to Modal FastVisionAPI!")
+    yield
+    # ── Shutdown ──
+
+
+app = FastAPI(title="Weapon Detection API", lifespan=lifespan)
 
 # Setup CORS — allow local dev, itsakawa.tech, Vercel, Render
 default_origins = [
@@ -273,11 +285,6 @@ def root_health_check():
     return health_check()
 
 
-@app.on_event("startup")
-async def preload_model():
-    print("[STARTUP] Restoring streams from Firebase...")
-    _restore_streams_from_firebase()
-    print("[STARTUP] Ready to proxy to Modal FastVisionAPI!")
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous")):
