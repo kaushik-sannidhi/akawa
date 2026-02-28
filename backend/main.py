@@ -12,13 +12,11 @@ from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.telemetry import telemetry_service
 from app.stream_manager import stream_manager
-from vision.fall_detection import FallDetector
 import requests
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Weapon Detection API")
-fall_detector = FallDetector()
 
 # Setup CORS — allow local dev, itsakawa.tech, Vercel, Render
 default_origins = [
@@ -361,9 +359,6 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                         telemetry_service.log_frames(sample_interval, uid)
                         
                         dets = batch_detections[i]
-                        # Run local fall detection
-                        fall_dets = fall_detector.detect(batch_frame)
-                        dets.extend(fall_dets)
 
                         if any(d.get("is_weapon") for d in dets):
                             telemetry_service.log_anomaly("NODE_PREANALYSIS", uid)
@@ -382,10 +377,6 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
         if len(batch_frames) >= 2:
             batch_detections = proxy_fast_vision_batch(batch_frames, video_name=matching[0])
             for i, (ts, dets) in enumerate(zip(batch_timestamps, batch_detections)):
-                # Run local fall detection on remaining frames
-                if i < len(batch_frames):
-                    fall_dets = fall_detector.detect(batch_frames[i])
-                    dets.extend(fall_dets)
                 sample_count += 1
                 progress = sample_count / max(total_samples, 1)
                 if any(d.get("is_weapon") for d in dets):
@@ -542,9 +533,6 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
 
                     if frame is not None:
                         detections = proxy_fast_vision_frame(frame, video_name=f"ws_{video_id}", source_type="upload")
-                        # Run local fall detection
-                        fall_dets = fall_detector.detect(frame)
-                        detections.extend(fall_dets)
 
                         telemetry_service.log_frames(1, uid)
                         if any(d.get("is_weapon") for d in detections):

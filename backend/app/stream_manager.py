@@ -10,8 +10,6 @@ import os
 import requests
 from typing import Dict, List, Any, Set, Optional
 from fastapi import WebSocket
-from vision.fall_detection import FallDetector
-
 logger = logging.getLogger(__name__)
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
 LIVE_EVENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "live_events")
@@ -75,7 +73,6 @@ class Stream:
 class StreamManager:
     def __init__(self):
         self.streams: Dict[str, Stream] = {}
-        self.fall_detector = FallDetector()
 
     # ------------------------------------------------------------------ CRUD
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
@@ -257,13 +254,6 @@ class StreamManager:
                 # 1. Weapon Detection (Modal)
                 detections = await asyncio.to_thread(
                     proxy_fast_vision_frame, frame, source_type="live")
-                
-                # 2. Fall Detection (Local Radar + Judge)
-                fall_detections = await asyncio.to_thread(
-                    self.fall_detector.detect, frame)
-                
-                # Merge detections
-                detections.extend(fall_detections)
 
                 latency_ms = int((time.time() - t0) * 1000)
 
