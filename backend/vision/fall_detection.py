@@ -206,8 +206,8 @@ class FallDetector:
         for ev in self.tracker.get_active():
             b = ev['box']
             # xyxyn normalization
-            bbox_norm = [b[0]/w, b[1]/h, b[2]/w, b[3]/h]
-            
+            bbox_norm = {"x1": b[0]/w, "y1": b[1]/h, "x2": b[2]/w, "y2": b[3]/h}
+
             # Extract confidence from label if present
             conf = 0.85
             if "CONFIRMED" in ev['label']:

@@ -151,7 +151,7 @@ async def proxy_audio_detect(req: AudioRequest, stream_id: str = None):
                         formatted_detections.append({
                             "class_name": det["class_name"],
                             "confidence": det["max_confidence"],
-                            "bbox": [0.05, 0.05, 0.95, 0.95], # Pseudo bbox for visual feedback
+                            "bbox": {"x1": 0.05, "y1": 0.05, "x2": 0.95, "y2": 0.95},
                             "is_weapon": True # Trigger frontend UI alert
                         })
                     
@@ -180,6 +180,20 @@ async def proxy_audio_analyze(req: AudioRequest):
     except Exception as e:
         return {"error": str(e)}
 
+def _normalize_bbox(bbox) -> dict:
+    """
+    Normalize bbox to {x1, y1, x2, y2} dict format that both frontend
+    components (VideoPlayer and StreamNode) can consume.
+    Handles both list [x1,y1,x2,y2] and dict {x1,y1,x2,y2} from Modal API.
+    """
+    if isinstance(bbox, dict):
+        return {"x1": bbox.get("x1", 0), "y1": bbox.get("y1", 0),
+                "x2": bbox.get("x2", 0), "y2": bbox.get("y2", 0)}
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        return {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]}
+    return {"x1": 0, "y1": 0, "x2": 1, "y2": 1}
+
+
 def proxy_fast_vision_frame(frame: np.ndarray, video_name: str = "live_stream", source_type: str = "live") -> List[Dict[str, Any]]:
     """Encodes a single OpenCV frame and sends it to the Modal FastVisionAPI."""
     try:
@@ -198,7 +212,7 @@ def proxy_fast_vision_frame(frame: np.ndarray, video_name: str = "live_stream", 
                 {
                     "class_name": d["class_name"],
                     "confidence": d["confidence"],
-                    "bbox": d["bbox"],
+                    "bbox": _normalize_bbox(d["bbox"]),
                     "is_weapon": d["is_weapon"]
                 } for d in data.get("detections", [])
             ]
@@ -237,7 +251,7 @@ def proxy_fast_vision_batch(frames: List[np.ndarray], video_name: str = "video_b
                 batch_results[-1] = [{
                     "class_name": "violence",
                     "confidence": data.get("sequence_violence_confidence", 1.0),
-                    "bbox": [0, 0, 1, 1], # Full screen generic box
+                    "bbox": {"x1": 0, "y1": 0, "x2": 1, "y2": 1},
                     "is_weapon": True # Trigger existing frontend logic
                 }]
         return batch_results
@@ -319,7 +333,8 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
 
         # We will sample frames for the batch sequence
         sample_interval = max(1, int(fps / 10))
-        total_samples = total_frames // sample_interval
+        # Count how many frames will actually be sampled (0, sample_interval, 2*sample_interval, ...)
+        total_samples = (total_frames + sample_interval - 1) // sample_interval if total_frames > 0 else 0
 
         yield f"data: {json.dumps({'type': 'start', 'total_frames': total_frames, 'total_samples': total_samples, 'fps': fps})}\n\n"
 
@@ -341,28 +356,20 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                 if len(batch_frames) >= BATCH_SIZE:
                     batch_detections = proxy_fast_vision_batch(batch_frames, video_name=matching[0])
 
-                    for i, (ts, frame) in enumerate(zip(batch_timestamps, batch_frames)):
+                    for i, (ts, batch_frame) in enumerate(zip(batch_timestamps, batch_frames)):
                         sample_count += 1
                         telemetry_service.log_frames(sample_interval, uid)
                         
                         dets = batch_detections[i]
                         # Run local fall detection
-                        fall_dets = fall_detector.detect(frame)
-                        dets.extend(fall_dets)
-
-                        sample_count += 1
-                        telemetry_service.log_frames(sample_interval, uid)
-                        
-                        dets = batch_detections[i]
-                        # Run local fall detection
-                        fall_dets = fall_detector.detect(frame)
+                        fall_dets = fall_detector.detect(batch_frame)
                         dets.extend(fall_dets)
 
                         if any(d.get("is_weapon") for d in dets):
                             telemetry_service.log_anomaly("NODE_PREANALYSIS", uid)
 
                         progress = sample_count / max(total_samples, 1)
-                        yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'progress': round(progress, 3)})}\n\n"
+                        yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'progress': round(min(progress, 1.0), 3)})}\n\n"
 
                     # Keep a sliding window for TwoStream by dropping half the batch,
                     # or clear entirely to save API calls. Clearing entirely for speed.
@@ -374,12 +381,16 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
         # Process remaining frames if we have at least 2 for optical flow
         if len(batch_frames) >= 2:
             batch_detections = proxy_fast_vision_batch(batch_frames, video_name=matching[0])
-            for ts, dets in zip(batch_timestamps, batch_detections):
+            for i, (ts, dets) in enumerate(zip(batch_timestamps, batch_detections)):
+                # Run local fall detection on remaining frames
+                if i < len(batch_frames):
+                    fall_dets = fall_detector.detect(batch_frames[i])
+                    dets.extend(fall_dets)
                 sample_count += 1
                 progress = sample_count / max(total_samples, 1)
                 if any(d.get("is_weapon") for d in dets):
                     telemetry_service.log_anomaly("NODE_PREANALYSIS", uid)
-                yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'progress': round(progress, 3)})}\n\n"
+                yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'progress': round(min(progress, 1.0), 3)})}\n\n"
 
         cap.release()
         yield f"data: {json.dumps({'type': 'done', 'total_analyzed': sample_count})}\n\n"
