@@ -481,6 +481,16 @@ class FastVisionAPI:
                             if confirmed:
                                 label = f"🚨 CONFIRMED FALL {conf_val:.2f}"
                                 current_events.append({'box': bbox, 'label': label})
+                        
+                        # Always include person detection for overlay (even if not suspicious)
+                        h_p, w_p = frame.shape[:2]
+                        xyxyn_p = [bbox[0]/w_p, bbox[1]/h_p, bbox[2]/w_p, bbox[3]/h_p]
+                        detections.append(Detection(
+                            bbox=xyxyn_p,
+                            confidence=float(res.boxes.conf[idx].item()),
+                            class_name="person",
+                            is_weapon=False
+                        ))
                     
                     self.tracker.update(current_events)
                     
@@ -785,4 +795,3 @@ class FastVisionAPI:
                         os.remove(temp_video_path)
                     except Exception:
                         pass
-
