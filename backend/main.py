@@ -8,7 +8,6 @@ from fastapi.staticfiles import StaticFiles
 import json
 import base64
 import numpy as np
-import torch
 from pydantic import BaseModel
 from typing import List, Dict, Any
 from app.telemetry import telemetry_service
