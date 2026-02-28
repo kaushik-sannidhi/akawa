@@ -197,19 +197,29 @@ fast_vision_image = (
         "torch>=2.0.0" # ultralytics needs torch
     )
     .add_local_dir(
-        "akawa/backend/vision/models",
+        "backend/vision/models",
         remote_path="/root/models"
     )
 )
 
 class FastVisionRequest(BaseModel):
-    video_b64: str
+    video_b64: Optional[str] = None
+    frame_b64: Optional[str] = None # For single frame websocket
+    frame_sequence_b64: Optional[List[str]] = None # For TwoStream sequences
+
+class Detection(BaseModel):
+    bbox: List[float] # [x1, y1, x2, y2]
+    confidence: float
+    class_name: str
+    is_weapon: bool
 
 class FastVisionResponse(BaseModel):
     weapons_detected: bool
     weapon_confidence: float
     violence_detected: bool
     violence_confidence: float
+    detections: Optional[List[Detection]] = None # Bounding boxes for single frame
+    sequence_violence_confidence: Optional[float] = None
     error: Optional[str] = None
 
 @app.cls(
@@ -257,110 +267,246 @@ class FastVisionAPI:
         import os
         import traceback
 
-        temp_video_path = None
-        try:
-            # Decode the base64 video
-            video_bytes = base64.b64decode(req.video_b64)
-            
-            # Write to a temporary file
-            fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
-            with os.fdopen(fd, 'wb') as f:
-                f.write(video_bytes)
+        # --- Single Frame Processing (WebSockets) ---
+        if req.frame_b64:
+            try:
+                # Decode single frame
+                encoded = req.frame_b64
+                if "," in encoded:
+                    encoded = encoded.split(",", 1)[1]
+                
+                img_data = base64.b64decode(encoded)
+                nparr = np.frombuffer(img_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                
+                if frame is None:
+                    return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error="Invalid image data")
 
-            cap = cv2.VideoCapture(temp_video_path)
-            
-            # Configuration
-            SEQ_LEN = 20
-            IMG_SIZE = (84, 84)
-            
-            frame_buffer = []
-            prev_gray = None
-            
-            brawl_confidences = []
-            weapon_confidences = []
-            
-            def compute_optical_flow(prev, curr):
-                flow = cv2.calcOpticalFlowFarneback(
-                    prev, curr, None, 
-                    pyr_scale=0.5, levels=3, winsize=15, 
-                    iterations=5, poly_n=5, poly_sigma=1.1, flags=0
-                )
-                return flow
-            
-            frame_count = 0
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                    
-                frame_count += 1
+                # YOLO Weapon Detection
+                results = self.weapon_model(frame, verbose=False)
                 
-                # --- 1. Weapon Detection (YOLO) ---
-                # Run weapon detection on every 5th frame to save compute
-                if frame_count % 5 == 0:
-                    results = self.weapon_model(frame, verbose=False)
-                    for r in results:
-                        # Check confidence of detections
-                        if len(r.boxes.conf) > 0:
-                            max_conf = float(r.boxes.conf.max().cpu().numpy())
-                            weapon_confidences.append(max_conf)
+                weapon_confidences = []
+                detections = []
                 
-                # --- 2. Violence Detection (Two-Stream) ---
-                resized_frame = cv2.resize(frame, IMG_SIZE)
-                rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-                gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+                # Default weapons
+                WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"]
                 
-                if prev_gray is None:
-                    flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+                if hasattr(self.weapon_model, "names"):
+                    class_names = self.weapon_model.names
                 else:
-                    flow = compute_optical_flow(prev_gray, gray)
-                    flow = np.clip(flow / 20.0, -1.0, 1.0)
+                    class_names = getattr(self.weapon_model.model, "names", {0: "weapon"})
+                
+                for r in results:
+                    boxes = r.boxes
+                    for i in range(len(boxes)):
+                        cls_id = int(boxes.cls[i].item())
+                        conf = float(boxes.conf[i].item())
+                        
+                        # Handle varied YOLO versions
+                        xyxyn = boxes.xyxyn[i].tolist() if hasattr(boxes, "xyxyn") else boxes.xyxy[i].tolist() # fallback
+
+                        # Normalize back if fallback used raw pixels
+                        if not hasattr(boxes, "xyxyn") and len(xyxyn) == 4 and (xyxyn[2] > 1 or xyxyn[3] > 1):
+                            h, w = frame.shape[:2]
+                            xyxyn = [xyxyn[0]/w, xyxyn[1]/h, xyxyn[2]/w, xyxyn[3]/h]
+                            
+                        class_name = class_names[cls_id] if isinstance(class_names, dict) else (class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}")
+                        is_weapon = class_name in WEAPON_CLASSES or class_name == "weapon"
+                        
+                        if is_weapon:
+                            weapon_confidences.append(conf)
+                            
+                        detections.append(Detection(
+                            bbox=xyxyn,
+                            confidence=conf,
+                            class_name=class_name,
+                            is_weapon=is_weapon
+                        ))
+                
+                max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
+                weapons_detected = max_weapon_conf > 0.5
+                
+                return FastVisionResponse(
+                    weapons_detected=weapons_detected,
+                    weapon_confidence=max_weapon_conf,
+                    violence_detected=False,
+                    violence_confidence=0.0,
+                    detections=detections
+                )
+                
+            except Exception as e:
+                traceback.print_exc()
+                return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error=str(e))
+                
+        # --- Frame Sequence Processing (TwoStream batch) ---
+        elif req.frame_sequence_b64:
+             try:
+                 # Reconstruct 5-channel optical flow batches from frames
+                 # Note: Requires optical flow logic or pre-computed flow.
+                 # For simplicity, if we pass exactly 20 frames, we can compute flow on the fly
+                 frames = []
+                 for encoded in req.frame_sequence_b64:
+                     if "," in encoded: encoded = encoded.split(",", 1)[1]
+                     img_data = base64.b64decode(encoded)
+                     nparr = np.frombuffer(img_data, np.uint8)
+                     f = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                     if f is not None: frames.append(f)
+                 
+                 if len(frames) < 2:
+                     return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error="Need at least 2 frames for flow")
+                 
+                 IMG_SIZE = (84, 84)
+                 SEQ_LEN = 20
+                 frame_buffer = []
+                 prev_gray = None
+                 
+                 def compute_optical_flow(prev, curr):
+                    flow = cv2.calcOpticalFlowFarneback(
+                        prev, curr, None, 
+                        pyr_scale=0.5, levels=3, winsize=15, 
+                        iterations=5, poly_n=5, poly_sigma=1.1, flags=0
+                    )
+                    return flow
+
+                 for frame in frames[:SEQ_LEN]: # Process up to SEQ_LEN
+                     resized_frame = cv2.resize(frame, IMG_SIZE)
+                     rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                     gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+                     
+                     if prev_gray is None:
+                         flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+                     else:
+                         flow = compute_optical_flow(prev_gray, gray)
+                         flow = np.clip(flow / 20.0, -1.0, 1.0)
+                     prev_gray = gray
+                     
+                     stacked_5c = np.concatenate([rgb, flow], axis=-1)
+                     frame_buffer.append(stacked_5c)
+                     
+                 # Pad if needed, though client should send exactly SEQ_LEN
+                 while len(frame_buffer) < SEQ_LEN:
+                     frame_buffer.append(frame_buffer[-1] if frame_buffer else np.zeros((*IMG_SIZE, 5), dtype=np.float32))
+                     
+                 sequence = np.array(frame_buffer[-SEQ_LEN:], dtype=np.float32)
+                 sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
+                 prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
+                 
+                 return FastVisionResponse(
+                     weapons_detected=False, weapon_confidence=0.0,
+                     violence_detected=prob > 0.6, violence_confidence=prob,
+                     sequence_violence_confidence=prob
+                 )
+             except Exception as e:
+                 traceback.print_exc()
+                 return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, violence_detected=False, violence_confidence=0.0, error=str(e))
+
+        # --- Full Video Processing (Existing logic) ---
+        # --- Full Video Processing (Existing logic) ---
+        elif req.video_b64:
+            temp_video_path = None
+            try:
+                # Decode the base64 video
+                video_bytes = base64.b64decode(req.video_b64)
+                
+                # Write to a temporary file
+                fd, temp_video_path = tempfile.mkstemp(suffix=".mp4")
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(video_bytes)
+
+                cap = cv2.VideoCapture(temp_video_path)
+                
+                # Configuration
+                SEQ_LEN = 20
+                IMG_SIZE = (84, 84)
+                
+                frame_buffer = []
+                prev_gray = None
+                
+                brawl_confidences = []
+                weapon_confidences = []
+                
+                def compute_optical_flow(prev, curr):
+                    flow = cv2.calcOpticalFlowFarneback(
+                        prev, curr, None, 
+                        pyr_scale=0.5, levels=3, winsize=15, 
+                        iterations=5, poly_n=5, poly_sigma=1.1, flags=0
+                    )
+                    return flow
+                
+                frame_count = 0
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                        
+                    frame_count += 1
                     
-                prev_gray = gray
-                
-                stacked_5c = np.concatenate([rgb, flow], axis=-1)
-                frame_buffer.append(stacked_5c)
-                
-                # Keep sliding window of size SEQ_LEN
-                if len(frame_buffer) > SEQ_LEN:
-                    frame_buffer.pop(0)
-                
-                if len(frame_buffer) == SEQ_LEN:
-                    sequence = np.array(frame_buffer, dtype=np.float32)
-                    sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
-                    prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
-                    brawl_confidences.append(prob)
+                    # --- 1. Weapon Detection (YOLO) ---
+                    # Run weapon detection on every 5th frame to save compute
+                    if frame_count % 5 == 0:
+                        results = self.weapon_model(frame, verbose=False)
+                        for r in results:
+                            # Check confidence of detections
+                            if len(r.boxes.conf) > 0:
+                                max_conf = float(r.boxes.conf.max().cpu().numpy())
+                                weapon_confidences.append(max_conf)
+                    
+                    # --- 2. Violence Detection (Two-Stream) ---
+                    resized_frame = cv2.resize(frame, IMG_SIZE)
+                    rgb = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                    gray = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2GRAY)
+                    
+                    if prev_gray is None:
+                        flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+                    else:
+                        flow = compute_optical_flow(prev_gray, gray)
+                        flow = np.clip(flow / 20.0, -1.0, 1.0)
+                        
+                    prev_gray = gray
+                    
+                    stacked_5c = np.concatenate([rgb, flow], axis=-1)
+                    frame_buffer.append(stacked_5c)
+                    
+                    # Keep sliding window of size SEQ_LEN
+                    if len(frame_buffer) > SEQ_LEN:
+                        frame_buffer.pop(0)
+                    
+                    if len(frame_buffer) == SEQ_LEN:
+                        sequence = np.array(frame_buffer, dtype=np.float32)
+                        sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
+                        prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
+                        brawl_confidences.append(prob)
 
-            cap.release()
-            
-            # Aggregation logic
-            max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
-            weapons_detected = max_weapon_conf > 0.5 # Threshold for weapon
-            
-            max_brawl_conf = max(brawl_confidences) if brawl_confidences else 0.0
-            violence_detected = max_brawl_conf > 0.6 # Threshold from test script
+                cap.release()
+                
+                # Aggregation logic
+                max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
+                weapons_detected = max_weapon_conf > 0.5 # Threshold for weapon
+                
+                max_brawl_conf = max(brawl_confidences) if brawl_confidences else 0.0
+                violence_detected = max_brawl_conf > 0.6 # Threshold from test script
 
-            return FastVisionResponse(
-                weapons_detected=weapons_detected,
-                weapon_confidence=max_weapon_conf,
-                violence_detected=violence_detected,
-                violence_confidence=max_brawl_conf
-            )
+                return FastVisionResponse(
+                    weapons_detected=weapons_detected,
+                    weapon_confidence=max_weapon_conf,
+                    violence_detected=violence_detected,
+                    violence_confidence=max_brawl_conf
+                )
 
-        except Exception as e:
-            traceback.print_exc()
-            return FastVisionResponse(
-                weapons_detected=False,
-                weapon_confidence=0.0,
-                violence_detected=False,
-                violence_confidence=0.0,
-                error=str(e)
-            )
+            except Exception as e:
+                traceback.print_exc()
+                return FastVisionResponse(
+                    weapons_detected=False,
+                    weapon_confidence=0.0,
+                    violence_detected=False,
+                    violence_confidence=0.0,
+                    error=str(e)
+                )
             
-        finally:
-            if temp_video_path and os.path.exists(temp_video_path):
-                try:
-                    os.remove(temp_video_path)
-                except Exception:
-                    pass
+            finally:
+                if temp_video_path and os.path.exists(temp_video_path):
+                    try:
+                        os.remove(temp_video_path)
+                    except Exception:
+                        pass
 

@@ -202,9 +202,8 @@ class StreamManager:
 
     # ------------------------------------------------------------------ AI loop
     async def _ai_loop(self, stream: Stream):
-        from main import get_detector
+        from main import proxy_fast_vision_frame
         from app.telemetry import telemetry_service
-        detector = get_detector(stream.model_id)
 
         last_det_json: str = ""
         last_frame_id: int = 0
@@ -224,7 +223,7 @@ class StreamManager:
 
                 t0 = time.time()
                 detections = await asyncio.to_thread(
-                    detector.process_frame, frame)
+                    proxy_fast_vision_frame, frame)
                 latency_ms = int((time.time() - t0) * 1000)
 
                 stream.latest_detections = detections

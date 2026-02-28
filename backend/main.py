@@ -5,13 +5,12 @@ import logging
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from app.detector import WeaponDetector, WEAPON_CLASSES
 import json
 import base64
 import numpy as np
 import torch
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict, Any
 from app.telemetry import telemetry_service
 from app.stream_manager import stream_manager
 import requests
@@ -51,11 +50,6 @@ LIVE_EVENTS_DIR = "live_events"
 os.makedirs(LIVE_EVENTS_DIR, exist_ok=True)
 
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
-
-# GPU Memory management for active detectors
-current_model_id = None
-global_detector = None
-
 
 def _restore_streams_from_firebase(uid_filter: str | None = None):
     """
@@ -97,29 +91,92 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
     except Exception as exc:
         print(f"[RESTORE] Failed syncing streams from Firebase: {exc}")
 
+# Hardcoded classes for generic alerts until the frontend is updated
+WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"]
 
-def get_detector(model_id: str = "latest"):
-    global current_model_id, global_detector
+# Modal API Endpoints
+FAST_VISION_URL = "https://apat7--akawa-vlm-api-fastvisionapi-analyze.modal.run"
+AUDIO_DETECT_URL = "https://apat7--akawa-audio-api-reyvazdetector-detect.modal.run"
+AUDIO_ANALYZE_URL = "https://apat7--akawa-audio-api-qwen2audiomodel-analyze.modal.run"
 
-    if current_model_id != model_id or global_detector is None:
-        if global_detector is not None:
-            if hasattr(global_detector, "model") and global_detector.model is not None:
-                del global_detector.model
-            global_detector = None
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+class AudioRequest(BaseModel):
+    audio_b64: str
+    prompt: str = ""
 
-        print(f"Loading YOLO weapon detector (model_id={model_id})")
-        global_detector = WeaponDetector(model_path=model_id)
-        current_model_id = model_id
+@app.post("/api/audio/detect")
+async def proxy_audio_detect(req: AudioRequest):
+    """Proxy purely to the Reyvaz audio event detection model"""
+    try:
+        resp = requests.post(AUDIO_DETECT_URL, json={"audio_b64": req.audio_b64}, timeout=10)
+        return resp.json() if resp.status_code == 200 else {"error": resp.text}
+    except Exception as e:
+        return {"error": str(e)}
 
-    return global_detector
+@app.post("/api/audio/analyze")
+async def proxy_audio_analyze(req: AudioRequest):
+    """Proxy to Qwen2-Audio for deep acoustic LLM analysis"""
+    try:
+        resp = requests.post(AUDIO_ANALYZE_URL, json={"audio_b64": req.audio_b64, "prompt": req.prompt}, timeout=30)
+        return resp.json() if resp.status_code == 200 else {"error": resp.text}
+    except Exception as e:
+        return {"error": str(e)}
 
+def proxy_fast_vision_frame(frame: np.ndarray) -> List[Dict[str, Any]]:
+    """Encodes a single OpenCV frame and sends it to the Modal FastVisionAPI."""
+    try:
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if not ret: return []
+        b64_str = base64.b64encode(buffer).decode('utf-8')
+        
+        resp = requests.post(FAST_VISION_URL, json={"frame_b64": b64_str}, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return [
+                {
+                    "class_name": d["class_name"],
+                    "confidence": d["confidence"],
+                    "bbox": d["bbox"],
+                    "is_weapon": d["is_weapon"]
+                } for d in data.get("detections", [])
+            ]
+        return []
+    except Exception as e:
+        logger.error(f"Error proxying frame to Modal FastVisionAPI: {e}")
+        return []
 
-@app.get("/api/models")
-def list_models():
-    """Returns all available trained models from runs/detect/."""
-    return {"models": WeaponDetector.list_available_models()}
+def proxy_fast_vision_batch(frames: List[np.ndarray]) -> List[List[Dict[str, Any]]]:
+    """Sends a sequence of frames for TwoStream evaluation. Optionally processes 1 YOLO frame."""
+    try:
+        encoded_frames = []
+        for f in frames:
+            ret, buf = cv2.imencode('.jpg', f, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+            if ret:
+                encoded_frames.append(base64.b64encode(buf).decode('utf-8'))
+                
+        if len(encoded_frames) < 2:
+            return [[] for _ in frames]
+            
+        resp = requests.post(FAST_VISION_URL, json={"frame_sequence_b64": encoded_frames}, timeout=10)
+        
+        # We process batches mainly for TwoStream. For YOLO we just grab a generic result 
+        # for the middle frame for demonstration, or return empty tracking boxes since 
+        # Modal TwoStream batch doesn't return YOLO boxes right now.
+        batch_results = [[] for _ in frames]
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("violence_detected"):
+                # Put a fake bounding box representing violence on the last frame
+                # to trigger the frontend UI
+                batch_results[-1] = [{
+                    "class_name": "violence",
+                    "confidence": data.get("sequence_violence_confidence", 1.0),
+                    "bbox": [0, 0, 1, 1], # Full screen generic box
+                    "is_weapon": True # Trigger existing frontend logic
+                }]
+        return batch_results
+    except Exception as e:
+        logger.error(f"Error proxying batch to Modal FastVisionAPI: {e}")
+        return [[] for _ in frames]
 
 
 @app.get("/api/health")
@@ -127,21 +184,15 @@ def health_check():
     """Simple health endpoint for tunnel / load-balancer probes."""
     return {
         "status": "ok",
-        "gpu": torch.cuda.is_available(),
-        "model_loaded": global_detector is not None,
+        "api": "modal_fastvision_proxy"
     }
 
 
 @app.on_event("startup")
 async def preload_model():
-    """Pre-load the YOLO detector at startup so the first WS connection is not delayed."""
-    print("[STARTUP] Pre-loading YOLO weapon detector...")
-    get_detector("latest")
-
     print("[STARTUP] Restoring streams from Firebase...")
     _restore_streams_from_firebase()
-
-    print("[STARTUP] YOLO weapon detector ready!")
+    print("[STARTUP] Ready to proxy to Modal FastVisionAPI!")
 
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous")):
@@ -177,7 +228,7 @@ from fastapi.responses import StreamingResponse
 @app.get("/api/analyze/{video_id}")
 async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "latest"):
     """
-    Pre-analyzes the entire uploaded video server-side using YOLO batch inference.
+    Pre-analyzes the entire uploaded video server-side using the Modal FastVisionAPI.
     Streams results via Server-Sent Events (SSE).
     """
     matching = [f for f in os.listdir(UPLOAD_DIR) if f.startswith(video_id)]
@@ -186,15 +237,14 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
 
     file_path = os.path.join(UPLOAD_DIR, matching[0])
 
-    BATCH_SIZE = 8  # Process 8 frames at once on GPU
+    BATCH_SIZE = 20  # FastVisionAPI (TwoStream) expects 20 frames for optical flow sequence
 
     def generate():
-        detector = get_detector(model_id)
         cap = cv2.VideoCapture(file_path)
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Sample ~10 frames per second for accuracy (every 3rd frame at 30fps)
+        # We will sample frames for the batch sequence
         sample_interval = max(1, int(fps / 10))
         total_samples = total_frames // sample_interval
 
@@ -214,9 +264,9 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                 batch_frames.append(frame)
                 batch_timestamps.append(round(frame_idx / fps, 3))
 
-                # When batch is full, run inference on all frames at once
+                # When batch is full, send to Modal FastVisionAPI
                 if len(batch_frames) >= BATCH_SIZE:
-                    batch_detections = detector.process_batch(batch_frames)
+                    batch_detections = proxy_fast_vision_batch(batch_frames)
 
                     for ts, dets in zip(batch_timestamps, batch_detections):
                         sample_count += 1
@@ -227,14 +277,16 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                         progress = sample_count / max(total_samples, 1)
                         yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'progress': round(progress, 3)})}\n\n"
 
+                    # Keep a sliding window for TwoStream by dropping half the batch,
+                    # or clear entirely to save API calls. Clearing entirely for speed.
                     batch_frames = []
                     batch_timestamps = []
 
             frame_idx += 1
 
-        # Process remaining frames in the last partial batch
-        if batch_frames:
-            batch_detections = detector.process_batch(batch_frames)
+        # Process remaining frames if we have at least 2 for optical flow
+        if len(batch_frames) >= 2:
+            batch_detections = proxy_fast_vision_batch(batch_frames)
             for ts, dets in zip(batch_timestamps, batch_detections):
                 sample_count += 1
                 progress = sample_count / max(total_samples, 1)
@@ -367,8 +419,6 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
         return
     print(f"[WS DETECT] Accepted connection for video {video_id}")
 
-    my_detector = get_detector(model)
-
     try:
         while True:
             try:
@@ -392,7 +442,7 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
                     if frame is not None:
-                        detections = my_detector.process_frame(frame)
+                        detections = proxy_fast_vision_frame(frame)
                         telemetry_service.log_frames(1, uid)
                         if any(d.get("is_weapon") for d in detections):
                             telemetry_service.log_anomaly("NODE_WS_STREAM", uid)
