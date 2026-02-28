@@ -271,48 +271,89 @@ export default function VideoPlayer({
 
                 // Only render if the nearest frame is within 0.4s of current time
                 if (nearest && Math.abs(nearest.timestamp - currentTime) < 0.4) {
+                    const phase = (Date.now() % 1000) / 1000;
+                    const pulseOpacity = 0.4 + 0.6 * Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
+
                     nearest.detections.forEach((d: any) => {
-                        if (d.confidence < thresholdRef.current) return;
+                        const isWeaponType = WEAPON_CLASSES.includes(d.class_name) || ["weapon", "gun"].includes(d.detection_type);
 
-                        const { x1: nx1, y1: ny1, x2: nx2, y2: ny2 } = d.bbox;
-
-                        let color = "#888888";
-                        let label = d.class_name;
-
-                        if (WEAPON_CLASSES.includes(d.class_name)) {
-                            color = "#FF2222";
-                            label = "WEAPON";
-                        } else if (d.class_name === "person") {
-                            color = "#888888";
-                            label = "PERSON";
-                        } else if (["umbrella", "chip_bag"].includes(d.class_name)) {
-                            color = "#FFCC00";
-                            label = d.class_name.toUpperCase();
+                        // Look back 1s to verify persistence
+                        let isPersistentWeapon = false;
+                        if (isWeaponType) {
+                            const oneSecAgo = nearest.timestamp - 1.0;
+                            // Filter frames in the last 1 second
+                            const recentFrames = frames.slice(Math.max(0, lo - 15), lo + 1).filter(f => f.timestamp >= oneSecAgo && f.timestamp <= nearest.timestamp);
+                            // Check if weapon was detected in those frames (at least 50% to be robust)
+                            const weaponFrames = recentFrames.filter(f => f.detections.some(det => WEAPON_CLASSES.includes(det.class_name) || ["weapon", "gun"].includes(det.detection_type)));
+                            if (weaponFrames.length >= Math.max(1, Math.floor(recentFrames.length * 0.5)) && (nearest.timestamp - recentFrames[0].timestamp >= 0.8)) {
+                                isPersistentWeapon = true;
+                            }
                         }
 
+                        const isWeapon = isWeaponType && isPersistentWeapon;
+                        const isPerson = d.class_name === "person";
+
+                        // Person: lower threshold for situational awareness
+                        const threshold = isPerson ? 0.25 : thresholdRef.current;
+                        if (d.confidence < threshold) return;
+
+                        const { x1: nx1, y1: ny1, x2: nx2, y2: ny2 } = d.bbox;
                         const px1 = nx1 * canvas.width;
                         const py1 = ny1 * canvas.height;
                         const sw = (nx2 - nx1) * canvas.width;
                         const sh = (ny2 - ny1) * canvas.height;
 
-                        // Semi-transparent fill
-                        ctx.fillStyle = color + "15";
-                        ctx.fillRect(px1, py1, sw, sh);
+                        if (isWeapon) {
+                            // High-Alert Weapon UI
+                            const opacity = pulseOpacity;
+                            const baseColor = `rgba(255, 51, 0, ${opacity})`;
+                            const fillColor = `rgba(255, 51, 0, ${opacity * 0.2})`;
 
-                        // Bounding box
-                        ctx.strokeStyle = color;
-                        ctx.lineWidth = 3;
-                        ctx.strokeRect(px1, py1, sw, sh);
+                            // Glow effect
+                            ctx.lineWidth = 1;
+                            for (let i = 1; i <= 3; i++) {
+                                const offset = i * 4;
+                                ctx.strokeStyle = `rgba(255, 51, 0, ${opacity * (0.3 / i)})`;
+                                ctx.strokeRect(px1 - offset, py1 - offset, sw + offset * 2, sh + offset * 2);
+                            }
 
-                        // Label bg + text
-                        ctx.fillStyle = color;
-                        ctx.font = "bold 16px monospace";
-                        const text = `${label} ${(d.confidence * 100).toFixed(0)}%`;
-                        const tw = ctx.measureText(text).width;
-                        ctx.fillRect(px1, py1 - 24, tw + 8, 24);
+                            // Main Box
+                            ctx.strokeStyle = baseColor;
+                            ctx.lineWidth = 4;
+                            ctx.strokeRect(px1, py1, sw, sh);
+                            ctx.fillStyle = fillColor;
+                            ctx.fillRect(px1, py1, sw, sh);
 
-                        ctx.fillStyle = "white";
-                        ctx.fillText(text, px1 + 4, py1 - 6);
+                            // Crosshair
+                            ctx.strokeStyle = baseColor;
+                            ctx.lineWidth = 1;
+                            ctx.beginPath();
+                            ctx.moveTo(px1 + sw / 2 - 10, py1 + sh / 2);
+                            ctx.lineTo(px1 + sw / 2 + 10, py1 + sh / 2);
+                            ctx.moveTo(px1 + sw / 2, py1 + sh / 2 - 10);
+                            ctx.lineTo(px1 + sw / 2, py1 + sh / 2 + 10);
+                            ctx.stroke();
+
+                            // Label Chip
+                            const labelText = `${(d.class_name || "WEAPON").toUpperCase()} ${(d.confidence * 100).toFixed(0)}%`;
+                            ctx.font = "bold 14px Inter, sans-serif";
+                            const tw = ctx.measureText(labelText).width;
+                            const chipHeight = 22;
+                            ctx.fillStyle = "#FF3300";
+                            ctx.fillRect(px1, py1 - chipHeight, tw + 12, chipHeight);
+                            ctx.fillStyle = "white";
+                            ctx.fillText(labelText, px1 + 6, py1 - 6);
+                        } else {
+                            // Presence / Passive Indicator
+                            let color = "rgba(200, 200, 200, 0.5)";
+                            if (["umbrella", "chip_bag"].includes(d.class_name)) color = "rgba(255, 204, 0, 0.7)";
+
+                            ctx.strokeStyle = color;
+                            ctx.lineWidth = 1.5;
+                            ctx.strokeRect(px1, py1, sw, sh);
+                            ctx.fillStyle = color.replace("0.5", "0.05").replace("0.7", "0.07");
+                            ctx.fillRect(px1, py1, sw, sh);
+                        }
                     });
                 }
             }

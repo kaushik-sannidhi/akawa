@@ -5,10 +5,10 @@ import { Trash2, Play, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
 import { joinMeeting, type RealtimeSession } from "@/lib/cloudflare-calls";
-import { 
-    RealtimeKitProvider, 
-    useRealtimeKitMeeting, 
-    useRealtimeKitSelector 
+import {
+    RealtimeKitProvider,
+    useRealtimeKitMeeting,
+    useRealtimeKitSelector
 } from "@cloudflare/realtimekit-react";
 
 interface StreamNodeProps {
@@ -46,16 +46,16 @@ function useAiInference(streamId: string, enabled: boolean, videoRef: React.RefO
                 aiTimer = setInterval(async () => {
                     if (sending || !aiWs || aiWs.readyState !== WebSocket.OPEN) return;
                     if (!videoRef.current || videoRef.current.readyState < 2) return;
-                    
+
                     const vw = videoRef.current.videoWidth;
                     const vh = videoRef.current.videoHeight;
                     if (!vw || !vh) return;
-                    
+
                     sending = true;
                     try {
                         const targetWidth = 480;
                         const targetHeight = Math.round((480 / vw) * vh);
-                        
+
                         // Use OffscreenCanvas and createImageBitmap for performance if available
                         if (typeof OffscreenCanvas !== "undefined" && typeof createImageBitmap !== "undefined") {
                             const offCanvas = new OffscreenCanvas(targetWidth, targetHeight);
@@ -81,7 +81,7 @@ function useAiInference(streamId: string, enabled: boolean, videoRef: React.RefO
                     } finally {
                         sending = false;
                     }
-                }, 100); 
+                }, 100);
             };
 
             aiWs.onclose = () => {
@@ -114,18 +114,18 @@ function RemoteStream({ audioMuted, setVideoLoaded, setIsStreaming, setNetState 
         // Find the first participant who is publishing video
         const joinedArr = participants.joined.toArray();
         const publisher = joinedArr.find((p: any) => p.videoTrack);
-        
+
         if (publisher && videoRef.current) {
             const videoTrack = publisher.videoTrack!;
             const audioTrack = publisher.audioTrack;
-            
+
             const ms = new MediaStream([videoTrack]);
             if (audioTrack) ms.addTrack(audioTrack);
-            
+
             videoRef.current.srcObject = ms;
             videoRef.current.muted = audioMuted;
             videoRef.current.play().catch(() => setShowPlayButton(true));
-            
+
             setVideoLoaded(true);
             setIsStreaming(true);
             setNetState("streaming_sfu");
@@ -213,6 +213,10 @@ function LocalStream({ streamId, setVideoLoaded, setIsStreaming, setNetState }: 
 export default function StreamNode({ stream, onDelete, onDetections, onSelect, onDoubleClick, isPrimary = false }: StreamNodeProps) {
     const overlayRef = useRef<HTMLCanvasElement>(null);
     const lastDetRef = useRef<string>("");
+    const lastDetectionsRaw = useRef<any[]>([]);
+    const weaponSeenStartRef = useRef<number | null>(null);
+    const pulsePhaseRef = useRef<number>(0);
+    const rafRef = useRef<number>(0);
 
     const [videoLoaded, setVideoLoaded] = useState(false);
     const [isStreaming, setIsStreaming] = useState(false);
@@ -232,7 +236,21 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
             id = Math.random().toString(36).substring(2, 15);
             localStorage.setItem("device_id", id);
         }
-        setLocalDeviceId(id);
+        queueMicrotask(() => setLocalDeviceId(id!));
+
+        // Pulsing animation loop
+        const animate = (time: number) => {
+            pulsePhaseRef.current = (time % 1000) / 1000;
+            if (lastDetectionsRaw.current.length > 0) {
+                drawDetections(lastDetectionsRaw.current);
+            }
+            rafRef.current = requestAnimationFrame(animate);
+        };
+        rafRef.current = requestAnimationFrame(animate);
+
+        return () => {
+            if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        };
     }, []);
 
     const isOwner = useMemo(() => isClientCam && stream.device_id === localDeviceId, [isClientCam, stream.device_id, localDeviceId]);
@@ -251,38 +269,94 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
         if (!ctx) return;
         ctx.clearRect(0, 0, dw, dh);
 
-        const scale = Math.max(dw / 1280, 0.4);
+        const phase = pulsePhaseRef.current;
+        const pulseOpacity = 0.4 + 0.6 * Math.sin(phase * Math.PI * 2) * 0.5 + 0.5; // Oscillation between 0.4 and 1.0
+
+        const hasWeaponInFrame = detections.some((det: any) => {
+            const detType = det.detection_type ?? "";
+            return (detType === "weapon" || det.class_name === "gun" || det.class_name === "weapon") && det.confidence >= 0.45;
+        });
+
+        if (hasWeaponInFrame) {
+            if (weaponSeenStartRef.current === null) {
+                weaponSeenStartRef.current = Date.now();
+            }
+        } else {
+            weaponSeenStartRef.current = null;
+        }
+
+        const isPersistentWeapon = weaponSeenStartRef.current !== null && (Date.now() - weaponSeenStartRef.current) > 1000;
+
         detections.forEach((det: any) => {
-            if (det.confidence < 0.45) return;
+            const detType = det.detection_type ?? "";
+            const isWeapon = detType === "weapon" || det.class_name === "gun" || det.class_name === "weapon";
+            const isPerson = det.class_name === "person";
+
+            // Person: lower threshold for situational awareness
+            const threshold = isPerson ? 0.25 : 0.45;
+            if (det.confidence < threshold) return;
+
             const b = det.bbox;
             const x1 = (b.x1 ?? b[0]) * dw;
             const y1 = (b.y1 ?? b[1]) * dh;
             const x2 = (b.x2 ?? b[2]) * dw;
             const y2 = (b.y2 ?? b[3]) * dh;
-            const detType = det.detection_type ?? "";
-            const isKnife = det.class_name === "knife" || detType === "knife";
-            const isThreat = det.is_threat
-                || detType === "weapon"
-                || detType === "fall"
-                || detType === "violent_person"
-                || det.class_name === "gun"
-                || det.class_name === "weapon";
+            const width = x2 - x1;
+            const height = y2 - y1;
 
-            let color = "#FFFFFF"; 
-            if (detType === "violent_person") color = "#CC33FF"; 
-            else if (detType === "fall") color = "#FF9900"; 
-            else if (isThreat) color = "#FF3300"; 
-            else if (isKnife) color = "#FFFF00"; 
+            if (isWeapon && isPersistentWeapon) {
+                // High-Alert Weapon UI
+                const opacity = pulseOpacity;
+                const baseColor = `rgba(255, 51, 0, ${opacity})`;
+                const fillColor = `rgba(255, 51, 0, ${opacity * 0.2})`;
 
-            const corner = Math.max(6, 10 * scale);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = Math.max(2, 2 * scale);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1 + corner); ctx.lineTo(x1, y1); ctx.lineTo(x1 + corner, y1);
-            ctx.moveTo(x2 - corner, y1); ctx.lineTo(x2, y1); ctx.lineTo(x2, y1 + corner);
-            ctx.moveTo(x2, y2 - corner); ctx.lineTo(x2, y2); ctx.lineTo(x2 - corner, y2);
-            ctx.moveTo(x1 + corner, y2); ctx.lineTo(x1, y2); ctx.lineTo(x1, y2 - corner);
-            ctx.stroke();
+                // Glow effect (2-3 concentric rectangles)
+                ctx.lineWidth = 1;
+                for (let i = 1; i <= 3; i++) {
+                    const offset = i * 4;
+                    ctx.strokeStyle = `rgba(255, 51, 0, ${opacity * (0.3 / i)})`;
+                    ctx.strokeRect(x1 - offset, y1 - offset, width + offset * 2, height + offset * 2);
+                }
+
+                // Main Box
+                ctx.strokeStyle = baseColor;
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x1, y1, width, height);
+                ctx.fillStyle = fillColor;
+                ctx.fillRect(x1, y1, width, height);
+
+                // Crosshair
+                ctx.strokeStyle = baseColor;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(x1 + width / 2 - 10, y1 + height / 2);
+                ctx.lineTo(x1 + width / 2 + 10, y1 + height / 2);
+                ctx.moveTo(x1 + width / 2, y1 + height / 2 - 10);
+                ctx.lineTo(x1 + width / 2, y1 + height / 2 + 10);
+                ctx.stroke();
+
+                // Label Chip
+                const label = `${(det.class_name || "WEAPON").toUpperCase()} ${(det.confidence * 100).toFixed(0)}%`;
+                ctx.font = "bold 14px Inter, sans-serif";
+                const textWidth = ctx.measureText(label).width;
+                const chipHeight = 22;
+                ctx.fillStyle = "#FF3300";
+                ctx.fillRect(x1, y1 - chipHeight, textWidth + 12, chipHeight);
+                ctx.fillStyle = "white";
+                ctx.fillText(label, x1 + 6, y1 - 6);
+            } else {
+                // Presence / Passive Indicator (Dim White/Soft Grey)
+                let color = "rgba(200, 200, 200, 0.5)"; // Default person/presence
+                if (detType === "violent_person") color = "rgba(204, 51, 255, 0.7)";
+                else if (detType === "fall") color = "rgba(255, 153, 0, 0.7)";
+                else if (det.class_name === "knife" || detType === "knife") color = "rgba(255, 255, 0, 0.8)";
+
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(x1, y1, width, height);
+                ctx.fillStyle = color.replace("0.5", "0.05").replace("0.7", "0.07").replace("0.8", "0.1");
+                ctx.fillRect(x1, y1, width, height);
+            }
         });
     }, []);
 
@@ -316,6 +390,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                         const key = JSON.stringify(data.detections.map((d: any) => d.class_name + d.confidence.toFixed(2)));
                         if (key !== lastDetRef.current) {
                             lastDetRef.current = key;
+                            lastDetectionsRaw.current = data.detections;
                             drawDetections(data.detections);
                             onDetections(data.detections, data.timestamp);
                         }
@@ -384,7 +459,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
         >
             {/* Header */}
             <div className="p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent absolute top-0 left-0 w-full">
-                <span className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] truncate max-w-[180px]`}>
+                <span className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] truncate max-w-[180px] whitespace-nowrap`}>
                     {stream.name} [{stream.type.toUpperCase()}]{hasMeeting ? " ⚡LIVE" : ""}
                 </span>
                 <div className="flex gap-1">
@@ -416,7 +491,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                                 <motion.div key={i} animate={{ opacity: [0.3, 1, 0.3] }} transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }} className="w-8 h-8 bg-[var(--color-iron)]" />
                             ))}
                         </div>
-                        <div className="text-[10px] font-bold tracking-[0.2em] text-[var(--color-data)]">
+                        <div className="text-[10px] font-bold tracking-[0.2em] text-[var(--color-data)] whitespace-nowrap">
                             [{netState.replace(/_/g, " ").toUpperCase()}]
                         </div>
                     </div>
@@ -425,17 +500,17 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
                 {rtkClient ? (
                     <RealtimeKitProvider value={rtkClient}>
                         {isOwner ? (
-                            <LocalStream 
+                            <LocalStream
                                 streamId={stream.id}
-                                setVideoLoaded={setVideoLoaded} 
-                                setIsStreaming={setIsStreaming} 
+                                setVideoLoaded={setVideoLoaded}
+                                setIsStreaming={setIsStreaming}
                                 setNetState={setNetState}
                             />
                         ) : (
                             <RemoteStream
                                 audioMuted={audioMuted}
-                                setVideoLoaded={setVideoLoaded} 
-                                setIsStreaming={setIsStreaming} 
+                                setVideoLoaded={setVideoLoaded}
+                                setIsStreaming={setIsStreaming}
                                 setNetState={setNetState}
                             />
                         )}
