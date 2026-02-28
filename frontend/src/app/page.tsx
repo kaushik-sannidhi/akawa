@@ -481,7 +481,7 @@ export default function LandingPage() {
 
                             <div className="flex justify-between font-mono text-[10px] md:text-sm text-[var(--color-data)] border-t-[2px] border-[var(--color-iron)] bg-[var(--color-void)] px-4 py-2">
                                 <span className="animate-pulse hidden md:inline">REC [....................]</span>
-                                <span>UTC: {new Date().toISOString().substring(0, 19).replace('T', ' ')}</span>
+                                <span suppressHydrationWarning>UTC: {new Date().toISOString().substring(0, 19).replace('T', ' ')}</span>
                             </div>
                         </div>
                     </div>
