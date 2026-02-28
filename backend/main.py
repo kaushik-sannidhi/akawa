@@ -455,66 +455,17 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
     return {"status": "success"}
 
 
-# ==================== WebRTC Signaling Endpoint ====================
 
 
-@app.websocket("/ws/signaling/{stream_id}/{role}/{peer_id}")
-async def websocket_signaling(websocket: WebSocket, stream_id: str, role: str, peer_id: str):
-    await websocket.accept()
-    stream = stream_manager.get_stream(stream_id)
-    if not stream:
-        await websocket.close(code=1008)
-        return
 
-    if role == "provider":
-        stream.provider_signal_ws = websocket
-        try:
-            while stream._running:
-                data = await websocket.receive_text()
-                msg = json.loads(data)
-                target_viewer = msg.get("to")
-                if target_viewer:
-                    await stream_manager.relay_signal_to_viewer(stream, target_viewer, msg)
-        except WebSocketDisconnect:
-            pass
-        except Exception as e:
-            logger.error(f"Signaling provider error: {e}")
-        finally:
-            if stream.provider_signal_ws == websocket:
-                stream.provider_signal_ws = None
-
-    elif role == "viewer":
-        stream.viewer_signal_wss[peer_id] = websocket
-        await stream_manager.relay_signal_to_provider(stream, {
-            "type": "viewer_joined",
-            "peer_id": peer_id
-        })
-        try:
-            while stream._running:
-                data = await websocket.receive_text()
-                msg = json.loads(data)
-                msg["from"] = peer_id
-                await stream_manager.relay_signal_to_provider(stream, msg)
-        except WebSocketDisconnect:
-            pass
-        except Exception as e:
-            logger.error(f"Signaling viewer error: {e}")
-        finally:
-            stream.viewer_signal_wss.pop(peer_id, None)
-            await stream_manager.relay_signal_to_provider(stream, {
-                "type": "viewer_left",
-                "peer_id": peer_id
-            })
-
-
-# ==================== Stream Input (AI frames from camera provider) ====================
+# ==================== Stream Input (frames from camera provider) ====================
 
 
 @app.websocket("/ws/stream_in/{stream_id}")
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
-    Receives low-res JPEG frames from the camera provider for AI inference only.
-    No longer re-broadcasts frames to viewers (WebRTC handles that).
+    Receives JPEG frames from the camera provider.
+    Stores each frame for AI inference AND broadcasts it to all viewers.
     """
     import asyncio as _aio
 
@@ -524,9 +475,8 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    logger.info(f"[WS IN] Camera provider connected for AI frames on stream {stream_id}")
+    logger.info(f"[WS IN] Camera provider connected on stream {stream_id}")
     stream.status = "active"
-    # Start the AI inference loop now that a provider is feeding frames
     stream_manager.ensure_ai_task(stream)
 
     def _decode_frame(b64_img: str):
@@ -541,11 +491,17 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
             data = await websocket.receive_text()
             payload = json.loads(data)
             if payload.get("type") == "frame":
-                # Decode in thread to avoid blocking the event loop
-                frame = await _aio.to_thread(_decode_frame, payload["frame"])
+                raw_b64 = payload["frame"]
+                # Strip the data:image/jpeg;base64, prefix for clean b64
+                clean_b64 = raw_b64.split(',', 1)[-1] if ',' in raw_b64 else raw_b64
+
+                # Decode for AI (in thread)
+                frame = await _aio.to_thread(_decode_frame, raw_b64)
                 if frame is not None:
-                    # Store reference directly — AI loop picks it up via id() change
                     stream.latest_frame_cv2 = frame
+
+                # Broadcast the frame to all viewers immediately
+                stream_manager.broadcast_client_frame(stream, clean_b64)
 
     except WebSocketDisconnect:
         logger.info(f"[WS IN] Camera provider disconnected from stream {stream_id}")
@@ -556,15 +512,14 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
             stream.status = "waiting_for_client"
 
 
-# ==================== Stream Output (detection results + fallback frames) ====================
+# ==================== Stream Output (frames + detections to viewers) ====================
 
 
 @app.websocket("/ws/stream_out/{stream_id}")
 async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     """
-    Viewers subscribe here to receive:
-    - For client_cam streams: detection-only JSON (video comes via WebRTC)
-    - For server_cam/rtsp streams: full frame + detection JSON (fallback mode)
+    All viewers subscribe here to receive frames + detection JSON.
+    Unified for client_cam, server_cam, and rtsp stream types.
     """
     await websocket.accept()
     stream = stream_manager.get_stream(stream_id)
@@ -572,32 +527,16 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         await websocket.close(code=1008)
         return
 
-    if stream.type == "client_cam":
-        # WebRTC handles video; this WS is detection-results only
-        logger.info(f"[WS OUT] Detection subscriber connected to client_cam stream {stream_id}")
-        stream.detection_wss.add(websocket)
-        try:
-            while stream._running and stream_manager.get_stream(stream_id):
-                # Keep connection alive; server pushes detection data
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
-        finally:
-            stream.detection_wss.discard(websocket)
-            logger.info(f"[WS OUT] Detection subscriber disconnected from stream {stream_id}")
-    else:
-        # server_cam / rtsp — full frame broadcast (fallback, no WebRTC for server streams)
-        logger.info(f"[WS OUT] Fallback frame subscriber connected to stream {stream_id}")
-        stream.fallback_wss.add(websocket)
-        try:
-            while stream._running and stream_manager.get_stream(stream_id):
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
-        finally:
-            stream.fallback_wss.discard(websocket)
-            logger.info(f"[WS OUT] Fallback subscriber disconnected from stream {stream_id}")
+    logger.info(f"[WS OUT] Viewer connected to stream {stream_id} (type={stream.type})")
+    stream.viewer_wss.add(websocket)
+    try:
+        while stream._running and stream_manager.get_stream(stream_id):
+            # Keep connection alive; server pushes frame+detection data
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        stream.viewer_wss.discard(websocket)
+        logger.info(f"[WS OUT] Viewer disconnected from stream {stream_id}")
