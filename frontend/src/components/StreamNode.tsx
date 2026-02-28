@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2, Play } from "lucide-react";
 import { motion } from "framer-motion";
-import { getWsUrl } from "@/lib/config";
+import { getWsUrl, getBaseUrl } from "@/lib/config";
 
 interface StreamNodeProps {
     stream: any;
@@ -129,13 +129,14 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
         let alive = true;
         let aiWs: WebSocket | null = null;
         let aiTimer: ReturnType<typeof setInterval> | null = null;
+        let mediaRecorder: MediaRecorder | null = null;
 
         const start = async () => {
             try {
                 setNetState("starting_camera");
                 const media = await navigator.mediaDevices.getUserMedia({
                     video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24 } },
-                    audio: false,
+                    audio: true, // Audio enabled for detection
                 });
                 if (!alive) {
                     media.getTracks().forEach((t) => t.stop());
@@ -148,6 +149,37 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                     videoRef.current.muted = true;
                     await videoRef.current.play().catch(() => undefined);
                     setVideoLoaded(true);
+                }
+
+                // Setup audio recording
+                try {
+                    const audioTracks = media.getAudioTracks();
+                    if (audioTracks.length > 0) {
+                        mediaRecorder = new MediaRecorder(media, { mimeType: 'audio/webm' });
+                        mediaRecorder.ondataavailable = async (e) => {
+                            if (e.data.size > 0 && alive) {
+                                try {
+                                    const buffer = await e.data.arrayBuffer();
+                                    const base64String = btoa(
+                                        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+                                    );
+
+                                    const baseUrl = getBaseUrl();
+                                    fetch(`${baseUrl}/api/audio/detect?stream_id=${stream.id}`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ audio_b64: base64String })
+                                    }).catch(err => console.error("Audio detection error:", err));
+                                } catch (err) {
+                                    console.error("Failed to process audio chunk:", err);
+                                }
+                            }
+                        };
+                        // Record in 3-second chunks
+                        mediaRecorder.start(3000);
+                    }
+                } catch (audioErr) {
+                    console.error("Failed to initialize audio recorder:", audioErr);
                 }
 
                 setNetState("connecting_ws");
@@ -192,6 +224,9 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             alive = false;
             if (aiTimer) clearInterval(aiTimer);
             if (aiWs) aiWs.close();
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            }
             if (localStreamRef.current) {
                 localStreamRef.current.getTracks().forEach((t) => t.stop());
                 localStreamRef.current = null;

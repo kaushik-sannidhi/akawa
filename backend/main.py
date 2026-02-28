@@ -104,12 +104,39 @@ class AudioRequest(BaseModel):
     prompt: str = ""
 
 @app.post("/api/audio/detect")
-async def proxy_audio_detect(req: AudioRequest):
-    """Proxy purely to the Reyvaz audio event detection model"""
+async def proxy_audio_detect(req: AudioRequest, stream_id: str = None):
+    """Proxy purely to the Reyvaz audio event detection model and broadcast to viewers"""
     try:
-        resp = requests.post(AUDIO_DETECT_URL, json={"audio_b64": req.audio_b64}, timeout=10)
-        return resp.json() if resp.status_code == 200 else {"error": resp.text}
+        resp = requests.post(AUDIO_DETECT_URL, json={"audio_b64": req.audio_b64}, timeout=60)
+        if resp.status_code == 200:
+            data = resp.json()
+            if stream_id and data.get("triggered"):
+                stream = stream_manager.get_stream(stream_id)
+                if stream:
+                    # Format as detection items for frontend
+                    formatted_detections = []
+                    for det in data.get("detections", []):
+                        formatted_detections.append({
+                            "class_name": det["class_name"],
+                            "confidence": det["max_confidence"],
+                            "bbox": [0.05, 0.05, 0.95, 0.95], # Pseudo bbox for visual feedback
+                            "is_weapon": True # Trigger frontend UI alert
+                        })
+                    
+                    if formatted_detections:
+                        import time
+                        payload = json.dumps({
+                            "type": "detections",
+                            "detections": formatted_detections,
+                            "timestamp": int(time.time() * 1000),
+                        })
+                        stream_manager._broadcast_text(stream, payload)
+                        
+                        telemetry_service.log_anomaly(f"AUDIO_DETECT_{stream.id[:6]}", stream.uid)
+            return data
+        return {"error": resp.text}
     except Exception as e:
+        logger.error(f"Audio detection error: {e}")
         return {"error": str(e)}
 
 @app.post("/api/audio/analyze")

@@ -7,7 +7,7 @@ export const getBaseUrl = () => {
     if (typeof window !== 'undefined'
         && window.location.hostname !== 'localhost'
         && window.location.hostname !== '127.0.0.1') {
-        return "https://backend.ingeniumstem.org";
+        return "https://akawa.onrender.com";
     }
 
     // Fallback for local development
