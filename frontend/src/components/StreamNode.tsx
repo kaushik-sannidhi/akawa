@@ -65,6 +65,9 @@ export default function StreamNode({
     /* ------------------------------------------------------------------ */
     /*  Detection overlay drawing                                          */
     /* ------------------------------------------------------------------ */
+    const lastClipTimeRef = useRef<number>(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+
     const drawDetections = useCallback((detections: any[]) => {
         if (!overlayRef.current) return;
         const dw = overlayRef.current.clientWidth || 640;
@@ -78,6 +81,8 @@ export default function StreamNode({
         ctx.clearRect(0, 0, dw, dh);
 
         const s = Math.max(dw / 1280, 0.4);
+        let activeWeaponDet = false;
+
         detections.forEach((det: any) => {
             if (det.confidence < 0.45) return;
             const b = det.bbox;
@@ -85,6 +90,9 @@ export default function StreamNode({
             const x2 = (b.x2 ?? b[2]) * dw, y2 = (b.y2 ?? b[3]) * dh;
             const wep = ["rifle", "handgun", "knife", "weapon"].includes(det.class_name);
             const col = wep ? "#FF3300" : "#FFFFFF";
+
+            if (wep) activeWeaponDet = true;
+
             const corner = Math.max(6, 10 * s);
             ctx.strokeStyle = col;
             ctx.lineWidth = Math.max(2, 2 * s);
@@ -104,7 +112,77 @@ export default function StreamNode({
             ctx.fillStyle = wep ? "#FFF" : "#000";
             ctx.fillText(text, x1 + 4, y1 - labelH * 0.25);
         });
-    }, []);
+
+        // Trigger recording of a clip if there is an active weapon and we haven't recorded one recently (e.g. 5 sec debounce)
+        const now = Date.now();
+        if (activeWeaponDet && (now - lastClipTimeRef.current > 5000) && !mediaRecorderRef.current) {
+            lastClipTimeRef.current = now;
+            try {
+                // To get both video and overlay, we need a composite canvas. 
+                // Alternatively, and more easily, we can just capture the original web stream if available, 
+                // OR we can create a composite canvas and stream it.
+                // For live feeds, `videoRef` or `imgRef` has the base frame, `overlayRef` has boxes.
+
+                // We'll create a composite stream capturing what the user actually sees
+                const compRend = document.createElement("canvas");
+                compRend.width = dw;
+                compRend.height = dh;
+                const compCtx = compRend.getContext("2d");
+
+                const frameStream = compRend.captureStream(10);
+                const recorder = new MediaRecorder(frameStream, { mimeType: "video/webm" });
+                const chunks: Blob[] = [];
+
+                recorder.ondataavailable = e => chunks.push(e.data);
+                recorder.onstop = () => {
+                    const clipBlob = new Blob(chunks, { type: "video/webm" });
+                    mediaRecorderRef.current = null;
+
+                    // Dispatch the event to the parent live page
+                    const ev = new CustomEvent('awca_clip_generated', {
+                        detail: {
+                            videoId: stream.id,
+                            timestamp: now, // using epoch for live
+                            videoBlob: clipBlob
+                        }
+                    });
+                    window.dispatchEvent(ev);
+                };
+
+                recorder.start();
+                mediaRecorderRef.current = recorder;
+
+                const durationMs = 4000;
+                const startRec = Date.now();
+
+                // Composite loop merging video/img + overlay into the capture canvas
+                const animLoop = () => {
+                    if (Date.now() - startRec > durationMs) {
+                        if (recorder.state !== "inactive") recorder.stop();
+                        return;
+                    }
+                    if (compCtx) {
+                        compCtx.fillStyle = 'black';
+                        compCtx.fillRect(0, 0, dw, dh);
+                        // base video/image
+                        if (videoRef.current && videoRef.current.readyState >= 2) {
+                            compCtx.drawImage(videoRef.current, 0, 0, dw, dh);
+                        } else if (imgRef.current && imgRef.current.complete) {
+                            compCtx.drawImage(imgRef.current, 0, 0, dw, dh);
+                        }
+                        // detection overlay
+                        compCtx.drawImage(overlayRef.current!, 0, 0, dw, dh);
+                    }
+                    requestAnimationFrame(animLoop);
+                };
+                animLoop();
+
+            } catch (err) {
+                console.error("Live clip capture error:", err);
+                mediaRecorderRef.current = null;
+            }
+        }
+    }, [stream.id]);
     const drawDetRef = useRef(drawDetections);
     drawDetRef.current = drawDetections;
 

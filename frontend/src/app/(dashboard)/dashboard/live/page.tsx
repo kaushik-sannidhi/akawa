@@ -8,6 +8,7 @@ import { PlusSquare, RefreshCw, Bell, X } from "lucide-react";
 import { useTelemetry } from "@/context/TelemetryContext";
 import { getBaseUrl } from "@/lib/config";
 import { useAuth } from "@/context/AuthContext";
+import { analyzeVideoWithVLM } from "@/lib/vlmApi";
 
 export default function LiveStreamPage() {
     const { logSysEvent } = useTelemetry();
@@ -100,7 +101,8 @@ export default function LiveStreamPage() {
                             class_name: event.class_name,
                             confidence: event.confidence,
                             startTimestamp: timestamp,
-                            endTimestamp: timestamp
+                            endTimestamp: timestamp,
+                            vlmAnalysis: null
                         });
                     }
                 });
@@ -108,6 +110,36 @@ export default function LiveStreamPage() {
             });
         }
     };
+
+    // Listen for custom event containing the generated WebM clips from live streams
+    useEffect(() => {
+        const handleClipGenerated = async (e: Event) => {
+            const customEvent = e as CustomEvent;
+            const { videoId, timestamp, videoBlob } = customEvent.detail;
+
+            // Mark the corresponding alert as currently analyzing
+            setAlerts(prev => prev.map(a =>
+                (Math.abs(a.startTimestamp - timestamp) < 5000 && !a.vlmAnalysis)
+                    ? { ...a, vlmAnalysis: "ANALYZING..." }
+                    : a
+            ));
+
+            const response = await analyzeVideoWithVLM({ videoBlob });
+
+            // Update the alert with the final text
+            setAlerts(prev => {
+                const updated = prev.map(a =>
+                    (Math.abs(a.startTimestamp - timestamp) < 5000 && a.vlmAnalysis === "ANALYZING...")
+                        ? { ...a, vlmAnalysis: response.text || `[VLM ERROR] ${response.error}` }
+                        : a
+                );
+                return updated;
+            });
+        };
+
+        window.addEventListener('awca_clip_generated', handleClipGenerated);
+        return () => window.removeEventListener('awca_clip_generated', handleClipGenerated);
+    }, []);
 
     const orderedStreams = [...streams].sort((a, b) => {
         if (a.id === primaryStreamId) return -1;
