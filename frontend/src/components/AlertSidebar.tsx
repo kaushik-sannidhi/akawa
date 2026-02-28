@@ -125,9 +125,9 @@ export default function AlertSidebar({
                                         <div className="mt-2 border-t border-[var(--color-iron)] pt-2">
                                             <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1">[ ALERT_CLIP // {alert.clip.duration_seconds || "?"}s ]</span>
                                             <div className="flex gap-2">
-                                                {alert.clip.playback_url && (
+                                                {(alert.clip.clip_url || alert.clip.playback_url) && (
                                                     <a
-                                                        href={alert.clip.playback_url}
+                                                        href={alert.clip.clip_url || alert.clip.playback_url}
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         onClick={(e) => e.stopPropagation()}
@@ -136,11 +136,10 @@ export default function AlertSidebar({
                                                         ▶ PLAY
                                                     </a>
                                                 )}
-                                                {alert.clip.download_url && (
+                                                {(alert.clip.clip_url || alert.clip.download_url) && (
                                                     <a
-                                                        href={alert.clip.download_url}
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
+                                                        href={alert.clip.clip_url || alert.clip.download_url}
+                                                        download
                                                         onClick={(e) => e.stopPropagation()}
                                                         className="text-[9px] text-[var(--color-silica)] border border-[var(--color-iron)] px-2 py-1 hover:bg-white hover:text-black transition-none"
                                                     >
