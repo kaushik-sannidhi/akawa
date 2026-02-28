@@ -140,7 +140,7 @@ class StreamManager:
                 continue
 
             height, width = frame.shape[:2]
-            target_width = 800
+            target_width = 640
             if width > target_width:
                 scale = target_width / width
                 frame = cv2.resize(frame, (target_width, int(height * scale)))
@@ -150,7 +150,7 @@ class StreamManager:
             # Encode and broadcast as raw binary JPEG
             ret_enc, buffer = await asyncio.to_thread(
                 cv2.imencode, '.jpg', frame,
-                [int(cv2.IMWRITE_JPEG_QUALITY), 65])
+                [int(cv2.IMWRITE_JPEG_QUALITY), 70])
             if ret_enc:
                 self._broadcast_bytes(stream, buffer.tobytes())
 
@@ -216,7 +216,7 @@ class StreamManager:
 
     # ---------------------------------------------------------- Broadcast helpers
     def _broadcast_bytes(self, stream: Stream, data: bytes):
-        """Send raw binary (JPEG frame) to all viewer WebSockets."""
+        """Send raw binary (JPEG frame) to all viewer WebSockets with backpressure."""
         for ws in list(stream.viewer_wss):
             asyncio.create_task(self._safe_ws_send_bytes(ws, data, stream.viewer_wss))
 
@@ -227,13 +227,18 @@ class StreamManager:
 
     async def _safe_ws_send_bytes(self, ws: WebSocket, data: bytes, wss_set: Set[WebSocket]):
         try:
-            await ws.send_bytes(data)
+            # Backpressure: drop frame if viewer is too slow (500ms timeout)
+            await asyncio.wait_for(ws.send_bytes(data), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass  # Skip this frame for slow viewer — they'll get the next one
         except Exception:
             wss_set.discard(ws)
 
     async def _safe_ws_send_text(self, ws: WebSocket, data_str: str, wss_set: Set[WebSocket]):
         try:
-            await ws.send_text(data_str)
+            await asyncio.wait_for(ws.send_text(data_str), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
         except Exception:
             wss_set.discard(ws)
 

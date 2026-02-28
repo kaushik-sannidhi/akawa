@@ -465,7 +465,7 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
     Receives binary JPEG frames from the camera provider.
-    Decodes for AI inference AND relays raw bytes to all viewers.
+    IMMEDIATELY relays raw bytes to viewers, then decodes for AI in background.
     """
     import asyncio as _aio
 
@@ -480,7 +480,6 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     stream_manager.ensure_ai_task(stream)
 
     def _decode_jpeg(jpeg_bytes: bytes):
-        """Decode raw JPEG bytes → cv2 frame (runs in thread pool)."""
         np_arr = np.frombuffer(jpeg_bytes, np.uint8)
         return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
@@ -490,13 +489,17 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
 
             if "bytes" in message and message["bytes"]:
                 jpeg_bytes = message["bytes"]
-                # Decode for AI in thread pool
-                frame = await _aio.to_thread(_decode_jpeg, jpeg_bytes)
-                if frame is not None:
-                    stream.latest_frame_cv2 = frame
-                # Relay raw bytes to all viewers
+
+                # 1. BROADCAST IMMEDIATELY — zero decode delay for viewers
                 from app.stream_manager import stream_manager as sm
                 sm._broadcast_bytes(stream, jpeg_bytes)
+
+                # 2. Decode for AI in background (fire-and-forget)
+                async def _bg_decode(data: bytes):
+                    frame = await _aio.to_thread(_decode_jpeg, data)
+                    if frame is not None:
+                        stream.latest_frame_cv2 = frame
+                _aio.create_task(_bg_decode(jpeg_bytes))
 
     except WebSocketDisconnect:
         logger.info(f"[WS IN] Camera provider disconnected from stream {stream_id}")
