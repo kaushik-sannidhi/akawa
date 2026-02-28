@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Trash2, Volume2, VolumeX, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
-import { VIDEOSDK_TOKEN } from "@/lib/videosdk";
+import { getVideoSDKToken } from "@/lib/videosdk";
 import {
     MeetingProvider,
     useMeeting,
@@ -30,6 +30,7 @@ export default function StreamNode(props: StreamNodeProps) {
     const { stream } = props;
     const [hasMounted, setHasMounted] = useState(false);
     const [localDeviceId, setLocalDeviceId] = useState("pending");
+    const [videosdkToken, setVideosdkToken] = useState<string | null>(null);
 
     useEffect(() => {
         let id = localStorage.getItem("device_id");
@@ -39,13 +40,18 @@ export default function StreamNode(props: StreamNodeProps) {
         }
         setLocalDeviceId(id);
         setHasMounted(true);
-    }, []);
+
+        // Fetch VideoSDK JWT token from backend
+        getVideoSDKToken()
+            .then((t) => setVideosdkToken(t))
+            .catch((err) => console.error("Failed to get VideoSDK token:", err));
+    }, []);;
 
     const isOwner = stream.type === "client_cam" && stream.device_id === localDeviceId;
     const isClientCam = stream.type === "client_cam";
 
-    // Only render after mount (need localStorage for device_id)
-    if (!hasMounted || !stream.room_id) {
+    // Only render after mount (need localStorage for device_id) and token
+    if (!hasMounted || !stream.room_id || !videosdkToken) {
         return <FallbackStreamNode {...props} />;
     }
 
@@ -67,7 +73,7 @@ export default function StreamNode(props: StreamNodeProps) {
                 participantId: participantId,
                 debugMode: false,
             }}
-            token={VIDEOSDK_TOKEN}
+            token={videosdkToken}
         >
             <StreamNodeInner
                 {...props}

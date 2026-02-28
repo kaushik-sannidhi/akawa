@@ -1,33 +1,43 @@
 /**
- * VideoSDK configuration for live camera streaming.
+ * VideoSDK helpers.
  *
- * Uses VideoSDK's Video Conferencing API:
- *  - Each camera stream = one VideoSDK "room"
- *  - Camera owner joins room with webcam + mic enabled
- *  - Viewers join the same roomId to watch
- *  - VideoSDK handles all WebRTC, TURN/STUN, NAT traversal
+ * All credentials live on the backend — the frontend only fetches a JWT
+ * token and creates rooms via backend proxy endpoints so the API secret
+ * is never exposed to the browser.
  */
 
-export const VIDEOSDK_TOKEN = "b89621c5-a89e-4d6e-8391-68711bcad2b7";
+import { getBaseUrl } from "./config";
+
+let _cachedToken: string | null = null;
+let _tokenFetchedAt = 0;
 
 /**
- * Create a new VideoSDK room for a camera stream.
- * Returns the unique roomId.
+ * Get a VideoSDK JWT token (cached for 1 hour).
  */
-export async function createVideoSDKRoom(): Promise<string> {
-    const res = await fetch("https://api.videosdk.live/v2/rooms", {
-        method: "POST",
-        headers: {
-            authorization: VIDEOSDK_TOKEN,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-    });
-
-    if (!res.ok) {
-        throw new Error(`VideoSDK room creation failed: ${res.status}`);
+export async function getVideoSDKToken(): Promise<string> {
+    const now = Date.now();
+    // Re-use cached token for up to 1 hour
+    if (_cachedToken && now - _tokenFetchedAt < 3600_000) {
+        return _cachedToken;
     }
 
-    const { roomId } = await res.json();
-    return roomId;
+    const res = await fetch(`${getBaseUrl()}/api/videosdk/token`);
+    if (!res.ok) throw new Error(`Failed to fetch VideoSDK token: ${res.status}`);
+    const { token } = await res.json();
+    _cachedToken = token;
+    _tokenFetchedAt = now;
+    return token;
+}
+
+/**
+ * Create a new VideoSDK room via the backend (keeps API key server-side).
+ */
+export async function createVideoSDKRoom(): Promise<string> {
+    const res = await fetch(`${getBaseUrl()}/api/videosdk/room`, {
+        method: "POST",
+    });
+    if (!res.ok) throw new Error(`VideoSDK room creation failed: ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    return data.roomId;
 }

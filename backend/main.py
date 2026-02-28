@@ -2,6 +2,9 @@ import os
 import uuid
 import cv2
 import logging
+import jwt
+import time as _time
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +18,12 @@ from typing import List
 from app.telemetry import telemetry_service
 from app.stream_manager import stream_manager
 import requests
+
+# Load .env from backend directory
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
+VIDEOSDK_API_KEY = os.getenv("VIDEOSDK_API_KEY", "")
+VIDEOSDK_SECRET_KEY = os.getenv("VIDEOSDK_SECRET_KEY", "")
 
 logger = logging.getLogger(__name__)
 
@@ -386,6 +395,47 @@ async def websocket_endpoint(websocket: WebSocket, video_id: str, model: str = "
         print(f"\n[WS DETECT] Client disconnected for video {video_id}")
     except Exception as e:
         print(f"[WS DETECT] Unexpected error for video {video_id}: {e}")
+
+
+# ==================== VideoSDK Token & Room ====================
+
+
+def _generate_videosdk_token() -> str:
+    """Generate a JWT token for VideoSDK using API key + secret."""
+    now = int(_time.time())
+    payload = {
+        "apikey": VIDEOSDK_API_KEY,
+        "permissions": ["allow_join", "allow_mod"],
+        "iat": now,
+        "exp": now + 86400,  # 24 hour expiry
+    }
+    return jwt.encode(payload, VIDEOSDK_SECRET_KEY, algorithm="HS256")
+
+
+@app.get("/api/videosdk/token")
+def get_videosdk_token():
+    """Return a fresh VideoSDK JWT token to the frontend."""
+    token = _generate_videosdk_token()
+    return {"token": token}
+
+
+@app.post("/api/videosdk/room")
+async def create_videosdk_room():
+    """Create a VideoSDK room server-side and return the roomId."""
+    token = _generate_videosdk_token()
+    res = requests.post(
+        "https://api.videosdk.live/v2/rooms",
+        headers={
+            "authorization": token,
+            "Content-Type": "application/json",
+        },
+        json={},
+    )
+    if res.status_code != 200:
+        logger.error(f"VideoSDK room creation failed: {res.status_code} {res.text}")
+        return {"error": f"VideoSDK returned {res.status_code}"}
+    data = res.json()
+    return {"roomId": data.get("roomId")}
 
 
 # ==================== Stream Management ====================
