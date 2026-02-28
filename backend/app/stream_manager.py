@@ -231,7 +231,7 @@ class StreamManager:
         """Batch-send binary data to all viewers concurrently."""
         async def _one(ws: WebSocket):
             try:
-                await asyncio.wait_for(ws.send_bytes(data), timeout=0.5)
+                await asyncio.wait_for(ws.send_bytes(data), timeout=0.15)
             except asyncio.TimeoutError:
                 pass  # Skip frame for slow viewer
             except Exception:

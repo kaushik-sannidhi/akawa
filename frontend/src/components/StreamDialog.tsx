@@ -23,7 +23,7 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
         if (streamType === "client_cam") {
             const getDevices = async () => {
                 try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
                     stream.getTracks().forEach(t => t.stop());
                     const devs = await navigator.mediaDevices.enumerateDevices();
                     const videoDevs = devs.filter(d => d.kind === "videoinput");

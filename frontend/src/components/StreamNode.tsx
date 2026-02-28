@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Trash2, Volume2, VolumeX, Play } from "lucide-react";
+import { Trash2, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
 
@@ -45,7 +45,6 @@ export default function StreamNode({
     /* ---- state ---- */
     const [isStreaming, setIsStreaming] = useState(false);
     const [videoLoaded, setVideoLoaded] = useState(false);
-    const [isMuted, setIsMuted] = useState(true);
     const [showPlayButton, setShowPlayButton] = useState(false);
     const [netState, setNetState] = useState<string>("init");
 
@@ -126,7 +125,7 @@ export default function StreamNode({
             try {
                 const media = await navigator.mediaDevices.getUserMedia({
                     video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-                    audio: true,
+                    audio: false,
                 });
                 if (!alive) { media.getTracks().forEach(t => t.stop()); return; }
                 localStreamRef.current = media;
@@ -153,33 +152,44 @@ export default function StreamNode({
             ws.binaryType = "arraybuffer";
             providerWsRef.current = ws;
 
-            const canvas = document.createElement("canvas");
-            const ctx2d = canvas.getContext("2d", { willReadFrequently: false });
+            // Use OffscreenCanvas for faster, off-main-thread JPEG encoding
+            let osc: OffscreenCanvas | null = null;
+            let oscCtx: OffscreenCanvasRenderingContext2D | null = null;
             let sending = false;
 
             ws.onopen = () => {
                 if (!alive) return;
                 setNetState("broadcasting");
                 // Capture frames at ~10 FPS
-                captureTimer = setInterval(() => {
+                captureTimer = setInterval(async () => {
                     if (!alive || !ws || ws.readyState !== WebSocket.OPEN) return;
                     if (!videoRef.current || videoRef.current.readyState < 2 || sending) return;
+                    // Backpressure: skip frame if socket buffer is congested (> 64KB queued)
+                    if (ws.bufferedAmount > 65536) return;
                     const vw = videoRef.current.videoWidth;
                     const vh = videoRef.current.videoHeight;
                     if (!vw || !vh) return;
 
                     const tw = 640;
                     const sc = tw / vw;
-                    canvas.width = tw;
-                    canvas.height = Math.round(vh * sc);
-                    ctx2d?.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                    const th = Math.round(vh * sc);
+
+                    if (!osc || osc.width !== tw || osc.height !== th) {
+                        osc = new OffscreenCanvas(tw, th);
+                        oscCtx = osc.getContext("2d");
+                    }
+                    if (!oscCtx) return;
+                    oscCtx.drawImage(videoRef.current, 0, 0, tw, th);
 
                     sending = true;
-                    canvas.toBlob((blob) => {
+                    try {
+                        const blob = await osc.convertToBlob({ type: "image/jpeg", quality: 0.65 });
                         sending = false;
                         if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return;
                         ws.send(blob);
-                    }, "image/jpeg", 0.65);
+                    } catch {
+                        sending = false;
+                    }
                 }, 100);
             };
 
@@ -219,7 +229,6 @@ export default function StreamNode({
         const wsUrl = getWsUrl();
         let ws: WebSocket | null = null;
         let pingTimer: ReturnType<typeof setInterval> | null = null;
-        let prevUrl: string | null = null;
         let firstFrame = false;
 
         function connect() {
@@ -242,14 +251,20 @@ export default function StreamNode({
 
             ws.onmessage = (evt) => {
                 if (evt.data instanceof Blob) {
-                    // Binary = raw JPEG frame
-                    if (imgRef.current) {
-                        const url = URL.createObjectURL(evt.data);
-                        imgRef.current.src = url;
-                        if (prevUrl) URL.revokeObjectURL(prevUrl);
-                        prevUrl = url;
+                    // Binary = raw JPEG frame — decode via createImageBitmap, paint to canvas
+                    createImageBitmap(evt.data).then((bmp) => {
+                        const cvs = imgRef.current as unknown as HTMLCanvasElement | null;
+                        if (!cvs) return;
+                        const ctx = cvs.getContext("2d");
+                        if (!ctx) return;
+                        if (cvs.width !== bmp.width || cvs.height !== bmp.height) {
+                            cvs.width = bmp.width;
+                            cvs.height = bmp.height;
+                        }
+                        ctx.drawImage(bmp, 0, 0);
+                        bmp.close();
                         if (!firstFrame) { firstFrame = true; setVideoLoaded(true); }
-                    }
+                    }).catch(() => { });
                 } else if (typeof evt.data === "string") {
                     // Text = detection JSON
                     try {
@@ -276,7 +291,6 @@ export default function StreamNode({
             if (pingTimer) clearInterval(pingTimer);
             if (ws) ws.close();
             viewerWsRef.current = null;
-            if (prevUrl) URL.revokeObjectURL(prevUrl);
         };
     }, [isClientCam, isOwner, stream.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -326,10 +340,10 @@ export default function StreamNode({
         };
     }, [isClientCam, isOwner, stream.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    /* ---- mute control ---- */
+    /* ---- video always muted (no audio transmitted) ---- */
     useEffect(() => {
-        if (videoRef.current) videoRef.current.muted = isOwner ? true : isMuted;
-    }, [isMuted, isOwner]);
+        if (videoRef.current) videoRef.current.muted = true;
+    }, []);
 
     /* ---- delete ---- */
     const handleDelete = async (e: React.MouseEvent) => {
@@ -367,15 +381,6 @@ export default function StreamNode({
                     {stream.name} [{stream.type.toUpperCase()}]
                 </span>
                 <div className="flex gap-2">
-                    {isClientCam && isOwner && (
-                        <button
-                            onClick={(e) => { e.stopPropagation(); setIsMuted(!isMuted); }}
-                            className={`bg-black border border-[var(--color-iron)] px-1 flex items-center justify-center ${isMuted ? 'text-[var(--color-silica)]' : 'text-[var(--color-data)]'} hover:text-white`}
-                            title={isMuted ? "Unmute" : "Mute"}
-                        >
-                            {isMuted ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3" />}
-                        </button>
-                    )}
                     <span className={`bg-black px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] ${isStreaming ? 'text-[var(--color-alert)] animate-pulse' : 'text-[#333]'}`}>
                         {isStreaming ? 'REC' : 'WAITING'}
                     </span>
@@ -421,8 +426,7 @@ export default function StreamNode({
 
                 {/* Viewer frame via WebSocket (all non-owner streams) */}
                 {!(isClientCam && isOwner) && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img ref={imgRef} className="absolute inset-0 h-full w-full object-cover z-10" alt="Stream" />
+                    <canvas ref={imgRef as any} className="absolute inset-0 h-full w-full object-cover z-10" />
                 )}
 
                 {/* Detection overlay */}
