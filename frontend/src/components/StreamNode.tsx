@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2, Play } from "lucide-react";
 import { motion } from "framer-motion";
-import { getWsUrl, getBaseUrl } from "@/lib/config";
+import { getWsUrl } from "@/lib/config";
+import { startWhipPublish, type WhipSession } from "@/lib/whip";
+import { startWhepPlayback, type WhepSession } from "@/lib/whep";
 
 interface StreamNodeProps {
     stream: any;
@@ -27,6 +29,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
     const isClientCam = stream.type === "client_cam";
     const isOwner = isClientCam && stream.device_id === localDeviceId;
+    const hasCfStream = !!(stream.whip_url && stream.whep_url);
 
     useEffect(() => {
         let id = localStorage.getItem("device_id");
@@ -34,7 +37,9 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             id = Math.random().toString(36).substring(2, 15);
             localStorage.setItem("device_id", id);
         }
-        setLocalDeviceId(id);
+        // Use queueMicrotask to avoid synchronous setState in effect
+        const deviceId = id;
+        queueMicrotask(() => setLocalDeviceId(deviceId));
     }, []);
 
     const drawDetections = useCallback((detections: any[]) => {
@@ -74,7 +79,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
         });
     }, []);
 
-    // ============ Detection + frame viewer WebSocket (all roles) ============
+    // ============ Detection WebSocket (works for both CF and legacy) ============
     useEffect(() => {
         let alive = true;
         const wsUrl = getWsUrl();
@@ -83,7 +88,11 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
         const connect = () => {
             if (!alive) return;
-            detWs = new WebSocket(`${wsUrl}/ws/stream_out/${stream.id}`);
+            // Use detection-only WS for Cloudflare streams, legacy stream_out for non-CF
+            const wsPath = hasCfStream
+                ? `${wsUrl}/ws/detections/${stream.id}`
+                : `${wsUrl}/ws/stream_out/${stream.id}`;
+            detWs = new WebSocket(wsPath);
             detWs.onopen = () => {
                 pingTimer = setInterval(() => {
                     if (detWs?.readyState === WebSocket.OPEN) detWs.send("ping");
@@ -92,7 +101,8 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             detWs.onmessage = (evt) => {
                 try {
                     const data = JSON.parse(evt.data);
-                    if (data.type === "frame" && data.frame) {
+                    // Legacy: frame data for non-CF streams
+                    if (data.type === "frame" && data.frame && !hasCfStream) {
                         setFallbackFrame(`data:image/jpeg;base64,${data.frame}`);
                         setVideoLoaded(true);
                         setIsStreaming(true);
@@ -120,23 +130,21 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             if (pingTimer) clearInterval(pingTimer);
             if (detWs) detWs.close();
         };
-    }, [stream.id, drawDetections, onDetections]);
+    }, [stream.id, hasCfStream, drawDetections, onDetections]);
 
-    // ============ Camera provider: capture & send frames via WebSocket ============
+    // ============ Cloudflare WHIP: Camera owner publishes via WebRTC ============
     useEffect(() => {
-        if (!isClientCam || !isOwner) return;
+        if (!isClientCam || !isOwner || !hasCfStream) return;
 
         let alive = true;
-        let aiWs: WebSocket | null = null;
-        let aiTimer: ReturnType<typeof setInterval> | null = null;
-        let mediaRecorder: MediaRecorder | null = null;
+        let whipSession: WhipSession | null = null;
 
         const start = async () => {
             try {
                 setNetState("starting_camera");
                 const media = await navigator.mediaDevices.getUserMedia({
                     video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24 } },
-                    audio: true, // Audio enabled for detection
+                    audio: true,
                 });
                 if (!alive) {
                     media.getTracks().forEach((t) => t.stop());
@@ -151,35 +159,121 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                     setVideoLoaded(true);
                 }
 
-                // Setup audio recording
-                try {
-                    const audioTracks = media.getAudioTracks();
-                    if (audioTracks.length > 0) {
-                        mediaRecorder = new MediaRecorder(media, { mimeType: 'audio/webm' });
-                        mediaRecorder.ondataavailable = async (e) => {
-                            if (e.data.size > 0 && alive) {
-                                try {
-                                    const buffer = await e.data.arrayBuffer();
-                                    const base64String = btoa(
-                                        new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-                                    );
+                setNetState("connecting_whip");
+                whipSession = await startWhipPublish(media, stream.whip_url);
+                setIsStreaming(true);
+                setNetState("streaming_webrtc");
 
-                                    const baseUrl = getBaseUrl();
-                                    fetch(`${baseUrl}/api/audio/detect?stream_id=${stream.id}`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ audio_b64: base64String })
-                                    }).catch(err => console.error("Audio detection error:", err));
-                                } catch (err) {
-                                    console.error("Failed to process audio chunk:", err);
-                                }
-                            }
-                        };
-                        // Record in 3-second chunks
-                        mediaRecorder.start(3000);
+                // Monitor connection state
+                whipSession.pc.addEventListener("connectionstatechange", () => {
+                    const state = whipSession?.pc.connectionState;
+                    if (state === "disconnected" || state === "failed") {
+                        setNetState("reconnecting");
+                        if (alive) {
+                            whipSession?.stop();
+                            setTimeout(start, 3000);
+                        }
                     }
-                } catch (audioErr) {
-                    console.error("Failed to initialize audio recorder:", audioErr);
+                });
+            } catch (err) {
+                console.error("[WHIP] start failed:", err);
+                setNetState("whip_error");
+                // Retry after delay
+                if (alive) setTimeout(start, 5000);
+            }
+        };
+
+        start();
+        return () => {
+            alive = false;
+            if (whipSession) whipSession.stop();
+            if (localStreamRef.current) {
+                localStreamRef.current.getTracks().forEach((t) => t.stop());
+                localStreamRef.current = null;
+            }
+        };
+    }, [isClientCam, isOwner, hasCfStream, stream.whip_url, stream.id]);
+
+    // ============ Cloudflare WHEP: Viewer receives via WebRTC ============
+    useEffect(() => {
+        // Only for viewers (not the camera owner), and only when CF is available
+        if (isOwner || !hasCfStream) return;
+
+        let alive = true;
+        let whepSession: WhepSession | null = null;
+
+        const start = async () => {
+            try {
+                setNetState("connecting_whep");
+                whepSession = await startWhepPlayback(stream.whep_url);
+
+                if (!alive) {
+                    whepSession.stop();
+                    return;
+                }
+
+                if (videoRef.current) {
+                    videoRef.current.srcObject = whepSession.stream;
+                    videoRef.current.muted = false;
+                    await videoRef.current.play().catch(() => {
+                        setShowPlayButton(true);
+                    });
+                    setVideoLoaded(true);
+                    setIsStreaming(true);
+                    setNetState("streaming_webrtc");
+                }
+
+                // Monitor connection state
+                whepSession.pc.addEventListener("connectionstatechange", () => {
+                    const state = whepSession?.pc.connectionState;
+                    if (state === "disconnected" || state === "failed") {
+                        setNetState("reconnecting");
+                        if (alive) {
+                            whepSession?.stop();
+                            setTimeout(start, 3000);
+                        }
+                    }
+                });
+            } catch (err) {
+                console.error("[WHEP] playback failed:", err);
+                setNetState("whep_error");
+                if (alive) setTimeout(start, 5000);
+            }
+        };
+
+        start();
+        return () => {
+            alive = false;
+            if (whepSession) whepSession.stop();
+        };
+    }, [isOwner, hasCfStream, stream.whep_url, stream.id]);
+
+    // ============ Legacy WS camera provider: capture & send frames (fallback when no CF) ============
+    useEffect(() => {
+        if (!isClientCam || !isOwner || hasCfStream) return;
+
+        let alive = true;
+        let aiWs: WebSocket | null = null;
+        let aiTimer: ReturnType<typeof setInterval> | null = null;
+
+        const start = async () => {
+            try {
+                setNetState("starting_camera");
+                const media = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 24 } },
+                    audio: false,
+                });
+                if (!alive) {
+                    media.getTracks().forEach((t) => t.stop());
+                    return;
+                }
+
+                localStreamRef.current = media;
+                if (videoRef.current) {
+                    videoRef.current.srcObject = media;
+                    videoRef.current.muted = true;
+                    await videoRef.current.play().catch(() => undefined);
+                    setVideoLoaded(true);
                 }
 
                 setNetState("connecting_ws");
@@ -224,15 +318,12 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             alive = false;
             if (aiTimer) clearInterval(aiTimer);
             if (aiWs) aiWs.close();
-            if (mediaRecorder && mediaRecorder.state !== "inactive") {
-                mediaRecorder.stop();
-            }
             if (localStreamRef.current) {
                 localStreamRef.current.getTracks().forEach((t) => t.stop());
                 localStreamRef.current = null;
             }
         };
-    }, [isClientCam, isOwner, stream.id]);
+    }, [isClientCam, isOwner, hasCfStream, stream.id]);
 
     const handleDelete = async (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -240,6 +331,9 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
         if (!ok) return;
         onDelete(stream.id, true);
     };
+
+    // Determine if we should show <video> or <img> fallback
+    const useVideoElement = isOwner || hasCfStream;
 
     return (
         <motion.div
@@ -254,7 +348,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
             <div className={`p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent ${!isPrimary ? "bg-black border-b-[2px] border-[var(--color-iron)]" : ""} absolute top-0 left-0 w-full`}>
                 <span className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] truncate max-w-[180px]`}>
-                    {stream.name} [{stream.type.toUpperCase()}]
+                    {stream.name} [{stream.type.toUpperCase()}]{hasCfStream ? " ⚡WRT" : ""}
                 </span>
                 <div className="flex gap-2">
                     <span className={`bg-black px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"} border-[1px] border-[var(--color-iron)] ${isStreaming ? "text-[var(--color-alert)] animate-pulse" : "text-[#333]"}`}>
@@ -285,18 +379,18 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                     </div>
                 )}
 
-                {isClientCam && isOwner ? (
-                    /* Owner sees their own camera via <video> element */
+                {useVideoElement ? (
+                    /* Owner sees local camera or viewer sees WebRTC via WHEP */
                     <video
                         ref={videoRef}
                         className="absolute inset-0 h-full w-full object-cover z-10"
                         style={{ transform: "translateZ(0)" }}
                         autoPlay
                         playsInline
-                        muted
+                        muted={isOwner}
                     />
                 ) : (
-                    /* Viewers + non-client see base64 frames from WebSocket */
+                    /* Legacy viewers see base64 frames from WebSocket */
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                         src={fallbackFrame || ""}

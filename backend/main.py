@@ -85,7 +85,12 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     model_id=st_data.get("model_id", "latest"),
                     device_id=st_data.get("device_id", ""),
                     stream_id=st_id,
-                    skip_ai=(st_data.get("type") == "client_cam"),
+                    skip_ai=(st_data.get("type") == "client_cam" and not st_data.get("cf_thumbnail_url")),
+                    cf_live_input_uid=st_data.get("cf_live_input_uid", ""),
+                    cf_whip_url=st_data.get("cf_whip_url", ""),
+                    cf_whep_url=st_data.get("cf_whep_url", ""),
+                    cf_thumbnail_url=st_data.get("cf_thumbnail_url", ""),
+                    cf_playback_url=st_data.get("cf_playback_url", ""),
                 )
                 print(f"[RESTORE] Restored stream {st_id} ({st_data.get('type', 'unknown')}) for {user_uid}")
     except Exception as exc:
@@ -527,6 +532,20 @@ async def list_streams(uid: str = "anonymous"):
 @app.post("/api/streams")
 async def create_stream(req: StreamCreateRequest):
     print(f"\n[API] POST /api/streams - Received request to create stream: {req.name}, type: {req.stream_type}")
+
+    # Provision Cloudflare Stream Live Input for client_cam streams
+    cf_info = None
+    if req.stream_type == "client_cam":
+        try:
+            from app.cloudflare_stream import create_live_input
+            cf_info = create_live_input(name=req.name, uid=req.uid)
+            if cf_info:
+                print(f"[API] Created Cloudflare Live Input: {cf_info['live_input_uid']}")
+            else:
+                print("[API] Cloudflare Stream not configured or failed — falling back to legacy WS relay")
+        except Exception as e:
+            print(f"[API] Cloudflare Stream provisioning failed: {e}")
+
     stream = stream_manager.add_stream(
         name=req.name,
         stream_type=req.stream_type,
@@ -534,6 +553,11 @@ async def create_stream(req: StreamCreateRequest):
         uid=req.uid,
         model_id=req.model_id,
         device_id=req.device_id,
+        cf_live_input_uid=cf_info["live_input_uid"] if cf_info else "",
+        cf_whip_url=cf_info["whip_url"] if cf_info else "",
+        cf_whep_url=cf_info["whep_url"] if cf_info else "",
+        cf_thumbnail_url=cf_info["thumbnail_url"] if cf_info else "",
+        cf_playback_url=cf_info["playback_url"] if cf_info else "",
     )
     
     # Save to Firebase
@@ -545,7 +569,12 @@ async def create_stream(req: StreamCreateRequest):
             "uid": req.uid,
             "model_id": req.model_id,
             "device_id": req.device_id,
-            "created_at": __import__("datetime").datetime.now().isoformat()
+            "created_at": __import__("datetime").datetime.now().isoformat(),
+            "cf_live_input_uid": stream.cf_live_input_uid,
+            "cf_whip_url": stream.cf_whip_url,
+            "cf_whep_url": stream.cf_whep_url,
+            "cf_thumbnail_url": stream.cf_thumbnail_url,
+            "cf_playback_url": stream.cf_playback_url,
         }
         requests.put(f"{FIREBASE_RTDB_BASE}/streams/{req.uid}/{stream.id}.json", json=stream_data)
     except Exception as e:
@@ -639,6 +668,7 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     """
     Viewers subscribe here for video frames and AI detection overlay data.
     Receives combined frame + detection JSON payloads.
+    (Legacy endpoint — kept for backward compatibility with non-Cloudflare streams)
     """
     await websocket.accept()
     stream = stream_manager.get_stream(stream_id)
@@ -661,3 +691,73 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     finally:
         stream.viewer_wss.discard(websocket)
         logger.info(f"[WS OUT] Viewer disconnected from stream {stream_id}")
+
+
+# ==================== Detection-Only WebSocket (for Cloudflare WHEP streams) ====================
+
+
+@app.websocket("/ws/detections/{stream_id}")
+async def websocket_detections(websocket: WebSocket, stream_id: str):
+    """
+    Lightweight detection-only WebSocket for Cloudflare Stream viewers.
+    Video comes via WHEP (WebRTC), detections come here as JSON overlays.
+    """
+    await websocket.accept()
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        await websocket.close(code=1008)
+        return
+
+    logger.info(f"[WS DET] Detection subscriber connected to stream {stream_id}")
+    stream.detection_wss.add(websocket)
+    try:
+        while stream._running and stream_manager.get_stream(stream_id):
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
+            # Handle text pings from client keepalive
+            if "text" in message and message["text"] == "ping":
+                try:
+                    await websocket.send_text("pong")
+                except Exception:
+                    break
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        stream.detection_wss.discard(websocket)
+        logger.info(f"[WS DET] Detection subscriber disconnected from stream {stream_id}")
+
+
+# ==================== Alert Clips Endpoints ====================
+
+
+@app.get("/api/clips/{uid}")
+def list_alert_clips(uid: str, stream_id: str = "", limit: int = 50):
+    """
+    List saved alert clips for a user. Clips are saved when threats are
+    detected and then cleared on Cloudflare Stream-based live streams.
+    """
+    if not uid or uid == "anonymous":
+        return {"clips": []}
+
+    try:
+        url = f"{FIREBASE_RTDB_BASE}/alert_clips/{uid}.json"
+        resp = requests.get(url, timeout=6)
+        if resp.status_code != 200:
+            return {"clips": []}
+
+        raw = resp.json() or {}
+        if not isinstance(raw, dict):
+            return {"clips": []}
+
+        clips = list(raw.values())
+        if stream_id:
+            clips = [c for c in clips if c.get("stream_id") == stream_id]
+
+        clips.sort(key=lambda c: c.get("timestamp", 0), reverse=True)
+        return {"clips": clips[: max(1, min(limit, 200))]}
+    except Exception as exc:
+        return {"clips": [], "error": str(exc)}
+
