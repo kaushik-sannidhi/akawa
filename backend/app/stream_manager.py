@@ -216,31 +216,38 @@ class StreamManager:
 
     # ---------------------------------------------------------- Broadcast helpers
     def _broadcast_bytes(self, stream: Stream, data: bytes):
-        """Send raw binary (JPEG frame) to all viewer WebSockets with backpressure."""
-        for ws in list(stream.viewer_wss):
-            asyncio.create_task(self._safe_ws_send_bytes(ws, data, stream.viewer_wss))
+        """Send raw binary JPEG to all viewers — single task, batched via gather."""
+        viewers = list(stream.viewer_wss)
+        if viewers:
+            asyncio.create_task(self._send_all_bytes(viewers, data, stream.viewer_wss))
 
     def _broadcast_text(self, stream: Stream, data_str: str):
-        """Send text JSON (detections) to all viewer WebSockets."""
-        for ws in list(stream.viewer_wss):
-            asyncio.create_task(self._safe_ws_send_text(ws, data_str, stream.viewer_wss))
+        """Send text JSON to all viewers — single task, batched via gather."""
+        viewers = list(stream.viewer_wss)
+        if viewers:
+            asyncio.create_task(self._send_all_text(viewers, data_str, stream.viewer_wss))
 
-    async def _safe_ws_send_bytes(self, ws: WebSocket, data: bytes, wss_set: Set[WebSocket]):
-        try:
-            # Backpressure: drop frame if viewer is too slow (500ms timeout)
-            await asyncio.wait_for(ws.send_bytes(data), timeout=0.5)
-        except asyncio.TimeoutError:
-            pass  # Skip this frame for slow viewer — they'll get the next one
-        except Exception:
-            wss_set.discard(ws)
+    async def _send_all_bytes(self, viewers, data: bytes, wss_set: Set[WebSocket]):
+        """Batch-send binary data to all viewers concurrently."""
+        async def _one(ws: WebSocket):
+            try:
+                await asyncio.wait_for(ws.send_bytes(data), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass  # Skip frame for slow viewer
+            except Exception:
+                wss_set.discard(ws)
+        await asyncio.gather(*[_one(ws) for ws in viewers])
 
-    async def _safe_ws_send_text(self, ws: WebSocket, data_str: str, wss_set: Set[WebSocket]):
-        try:
-            await asyncio.wait_for(ws.send_text(data_str), timeout=1.0)
-        except asyncio.TimeoutError:
-            pass
-        except Exception:
-            wss_set.discard(ws)
+    async def _send_all_text(self, viewers, data_str: str, wss_set: Set[WebSocket]):
+        """Batch-send text data to all viewers concurrently."""
+        async def _one(ws: WebSocket):
+            try:
+                await asyncio.wait_for(ws.send_text(data_str), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                wss_set.discard(ws)
+        await asyncio.gather(*[_one(ws) for ws in viewers])
 
 
 stream_manager = StreamManager()
