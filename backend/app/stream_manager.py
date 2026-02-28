@@ -63,11 +63,11 @@ class StreamManager:
     # ------------------------------------------------------------------ CRUD
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
                    model_id: str = "latest", device_id: str = "",
-                   stream_id: str = None) -> Stream:
+                   stream_id: str = None, skip_ai: bool = False) -> Stream:
         stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id)
         self.streams[stream.id] = stream
         logger.info(f"====== NEW STREAM CREATED ======")
-        logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type}")
+        logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai}")
 
         if stream.type in ["rtsp", "server_cam"]:
             stream._running = True
@@ -79,46 +79,57 @@ class StreamManager:
         elif stream.type == "client_cam":
             stream.status = "waiting_for_client"
             stream._running = True
-            stream._ai_task = asyncio.create_task(self._ai_loop(stream))
+            # Only start AI loop if a provider will actually be feeding frames.
+            # Restored streams from Firebase have no provider yet — skip_ai
+            # prevents a busy-loop on latest_frame_cv2 == None.
+            if not skip_ai:
+                stream._ai_task = asyncio.create_task(self._ai_loop(stream))
 
         return stream
 
-    def remove_stream(self, stream_id: str):
-        if stream_id in self.streams:
-            stream = self.streams[stream_id]
-            stream._running = False
-            if stream._ai_task:
-                stream._ai_task.cancel()
-            if stream._capture_task:
-                stream._capture_task.cancel()
+    def ensure_ai_task(self, stream: Stream):
+        """Start the AI inference loop for a stream if not already running."""
+        if stream._ai_task is None or stream._ai_task.done():
+            stream._ai_task = asyncio.create_task(self._ai_loop(stream))
 
-            # Helper to safely close websockets from any context
-            def _safe_close(ws):
-                try:
-                    asyncio.create_task(ws.close())
-                except RuntimeError:
-                    # No running event loop — ignore; WS will close when loop resumes
-                    pass
+    async def remove_stream(self, stream_id: str):
+        if stream_id not in self.streams:
+            return
 
-            # Close detection subscribers
-            for ws in list(stream.detection_wss):
-                _safe_close(ws)
-            stream.detection_wss.clear()
+        stream = self.streams[stream_id]
+        stream._running = False
 
-            # Close fallback subscribers
-            for ws in list(stream.fallback_wss):
-                _safe_close(ws)
-            stream.fallback_wss.clear()
+        if stream._ai_task:
+            stream._ai_task.cancel()
+        if stream._capture_task:
+            stream._capture_task.cancel()
 
-            # Close signaling connections
-            if stream.provider_signal_ws:
-                _safe_close(stream.provider_signal_ws)
-            for ws in list(stream.viewer_signal_wss.values()):
-                _safe_close(ws)
-            stream.viewer_signal_wss.clear()
+        async def _safe_close(ws):
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
-            del self.streams[stream_id]
-            logger.info(f"====== STREAM REMOVED: {stream_id} ======")
+        # Close detection subscribers
+        for ws in list(stream.detection_wss):
+            await _safe_close(ws)
+        stream.detection_wss.clear()
+
+        # Close fallback subscribers
+        for ws in list(stream.fallback_wss):
+            await _safe_close(ws)
+        stream.fallback_wss.clear()
+
+        # Close signaling connections
+        if stream.provider_signal_ws:
+            await _safe_close(stream.provider_signal_ws)
+        for ws in list(stream.viewer_signal_wss.values()):
+            await _safe_close(ws)
+        stream.viewer_signal_wss.clear()
+
+        # Remove from dict AFTER all connections are closed
+        self.streams.pop(stream_id, None)
+        logger.info(f"====== STREAM REMOVED: {stream_id} ======")
 
     def get_stream(self, stream_id: str) -> Optional[Stream]:
         return self.streams.get(stream_id)

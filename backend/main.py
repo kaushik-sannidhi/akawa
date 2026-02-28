@@ -92,6 +92,10 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     model_id=st_data.get("model_id", "latest"),
                     device_id=st_data.get("device_id", ""),
                     stream_id=st_id,
+                    # Don't start AI loop for restored client_cam streams — no
+                    # provider is feeding frames yet.  The AI task is started
+                    # when a provider actually connects (provider-ready msg).
+                    skip_ai=(st_data.get("type") == "client_cam"),
                 )
                 print(f"[RESTORE] Restored stream {st_id} ({st_data.get('type', 'unknown')}) for {user_uid}")
     except Exception as exc:
@@ -441,7 +445,7 @@ async def create_stream(req: StreamCreateRequest):
 @app.delete("/api/streams/{stream_id}")
 async def delete_stream(stream_id: str, uid: str = "anonymous"):
     print(f"\n[API] DELETE /api/streams/{stream_id} - Received request to delete stream")
-    stream_manager.remove_stream(stream_id)
+    await stream_manager.remove_stream(stream_id)
     
     # Remove from Firebase
     try:
@@ -487,6 +491,10 @@ async def websocket_signal(websocket: WebSocket, stream_id: str):
 
     try:
         while True:
+            # Break out of the loop if the stream was deleted while we were waiting
+            if not stream_manager.get_stream(stream_id):
+                break
+
             raw = await websocket.receive_text()
             msg = json.loads(raw)
             msg_type = msg.get("type", "")
@@ -497,6 +505,9 @@ async def websocket_signal(websocket: WebSocket, stream_id: str):
                 stream.provider_signal_ws = websocket
                 stream.status = "active"
                 logger.info(f"[SIGNAL] Provider registered for stream {stream_id}")
+
+                # Start AI inference loop now that a provider is feeding frames
+                stream_manager.ensure_ai_task(stream)
 
                 # Tell provider about any viewers already connected
                 for vid in list(stream.viewer_signal_wss.keys()):
@@ -634,7 +645,7 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         logger.info(f"[WS OUT] Detection subscriber connected to client_cam stream {stream_id}")
         stream.detection_wss.add(websocket)
         try:
-            while stream._running:
+            while stream._running and stream_manager.get_stream(stream_id):
                 # Keep connection alive; server pushes detection data
                 await websocket.receive_text()
         except WebSocketDisconnect:
@@ -649,7 +660,7 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         logger.info(f"[WS OUT] Fallback frame subscriber connected to stream {stream_id}")
         stream.fallback_wss.add(websocket)
         try:
-            while stream._running:
+            while stream._running and stream_manager.get_stream(stream_id):
                 await websocket.receive_text()
         except WebSocketDisconnect:
             pass

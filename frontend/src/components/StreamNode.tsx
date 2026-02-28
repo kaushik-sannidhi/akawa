@@ -102,6 +102,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
     // WebRTC peer connections keyed by peerId (provider keeps one per viewer)
     const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
     const localStreamRef = useRef<MediaStream | null>(null);
+    const remoteStreamRef = useRef<MediaStream | null>(null);   // Accumulated remote tracks
 
     useEffect(() => {
         let id = localStorage.getItem("device_id");
@@ -188,6 +189,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             localStreamRef.current.getTracks().forEach((t) => t.stop());
             localStreamRef.current = null;
         }
+        remoteStreamRef.current = null;
         cleanupPeerConnections();
     }, [cleanupPeerConnections]);
 
@@ -256,6 +258,18 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             ctx.fillText(text, x1 + 4, y1 - (labelH * 0.25));
         });
     }, []);
+
+    /* ================================================================== */
+    /*  Attach remote stream to <video> once the ref is available          */
+    /* ================================================================== */
+    useEffect(() => {
+        if (!showRemoteVideo || !remoteVideoRef.current || !remoteStreamRef.current) return;
+        if (remoteVideoRef.current.srcObject !== remoteStreamRef.current) {
+            remoteVideoRef.current.srcObject = remoteStreamRef.current;
+            remoteVideoRef.current.muted = true; // required for autoplay
+            safePlay(remoteVideoRef.current);
+        }
+    });
 
     /* ================================================================== */
     /*  MAIN EFFECT — sets up all connections                              */
@@ -515,24 +529,33 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         const pc = new RTCPeerConnection(ICE_SERVERS);
                         peerConnectionsRef.current.set("provider", pc);
 
+                        // Tell the browser we expect to receive audio and video
+                        // (needed for Safari and for cases where the provider
+                        //  hasn't added tracks yet at the time the offer is created)
+                        pc.addTransceiver("video", { direction: "recvonly" });
+                        pc.addTransceiver("audio", { direction: "recvonly" });
+
                         // Accumulate tracks into a single MediaStream so both
                         // video and audio end up on the <video> element — Safari
                         // sometimes fires ontrack with an empty e.streams[].
                         const combinedStream = new MediaStream();
+                        remoteStreamRef.current = combinedStream;
 
                         pc.ontrack = (e) => {
                             console.log("[WebRTC Viewer] Got remote track", e.track.kind);
                             combinedStream.addTrack(e.track);
 
+                            // Try attaching immediately — the video element may
+                            // already be mounted.  If not, the useEffect above
+                            // will pick it up on the next render cycle.
                             if (remoteVideoRef.current) {
                                 remoteVideoRef.current.srcObject = combinedStream;
-                                // Muted for autoplay (mobile requires this)
                                 remoteVideoRef.current.muted = true;
                                 safePlay(remoteVideoRef.current);
-                                setVideoLoaded(true);
-                                setIsStreaming(true);
-                                streamingRef.current = true;
                             }
+                            setVideoLoaded(true);
+                            setIsStreaming(true);
+                            streamingRef.current = true;
                         };
 
                         // Send null candidate too (end-of-candidates — Safari compat)
@@ -558,6 +581,15 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                             if (pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "failed") {
                                 setIsStreaming(false);
                                 setVideoLoaded(false);
+
+                                // Auto-reconnect on ICE failure after a short delay
+                                if (pc.iceConnectionState === "failed" && isActive) {
+                                    console.log("[WebRTC Viewer] ICE failed — reconnecting in 2s");
+                                    pc.close();
+                                    peerConnectionsRef.current.delete("provider");
+                                    remoteStreamRef.current = null;
+                                    reconnectTimeout = setTimeout(initViewerWebRTC, 2000);
+                                }
                             }
                             if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
                                 setIsStreaming(true);
@@ -596,6 +628,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                 signalWs.onclose = () => {
                     setIsStreaming(false);
                     setVideoLoaded(false);
+                    remoteStreamRef.current = null;
                     if (isActive) reconnectTimeout = setTimeout(initViewerWebRTC, 3000);
                 };
                 signalWs.onerror = (e) => console.error("[Signal WS viewer] error", e);
@@ -697,6 +730,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             clearInterval(captureInterval);
             if (detPingInterval) clearInterval(detPingInterval);
             stopLocalStream();
+            remoteStreamRef.current = null;
             if (signalWs) signalWs.close();
             if (aiWs) aiWs.close();
             if (detWs) detWs.close();

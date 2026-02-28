@@ -49,17 +49,26 @@ export default function LiveStreamPage() {
 
     const handleDeleteStream = async (id: string, cascadeDelete: boolean = true) => {
         if (!user?.uid) return;
+
+        // Optimistic removal first so the UI updates immediately
+        setStreams(prev => prev.filter(s => s.id !== id));
+        logSysEvent(`[WARN] SENSOR PROXY ${id.substring(0, 6).toUpperCase()} TERMINATED`);
+
         try {
             const uid = user.uid;
             if (cascadeDelete) {
                 const res = await fetch(`${getBaseUrl()}/api/streams/${id}?uid=${uid}`, { method: "DELETE" });
                 if (!res.ok) console.warn(`Delete returned HTTP ${res.status}`);
             }
-            logSysEvent(`[WARN] SENSOR PROXY ${id.substring(0, 6).toUpperCase()} TERMINATED`);
-            setStreams(prev => prev.filter(s => s.id !== id));  // Optimistic removal
+            // Short delay before re-fetching to give the backend time to fully
+            // clean up WebSocket connections so the deleted stream doesn't
+            // re-appear from a stale list.
+            await new Promise(r => setTimeout(r, 600));
             fetchStreams();
         } catch (err: any) {
             console.error("Failed to delete stream:", err.message);
+            // Still re-fetch to reconcile state even on error
+            fetchStreams();
         }
     };
 
