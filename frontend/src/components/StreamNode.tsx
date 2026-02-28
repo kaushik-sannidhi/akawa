@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Trash2, Volume2, VolumeX, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
@@ -29,13 +29,12 @@ export default function StreamNode({
     const videoRef = useRef<HTMLVideoElement>(null);
     const imgRef = useRef<HTMLImageElement>(null);
     const overlayRef = useRef<HTMLCanvasElement>(null);
+    const localStreamRef = useRef<MediaStream | null>(null);
+    const providerWsRef = useRef<WebSocket | null>(null);
 
     // Stable refs to avoid effect dependency churn
     const onDetectionsRef = useRef(onDetections);
     onDetectionsRef.current = onDetections;
-    const drawDetectionsRef = useRef<(d: any[]) => void>(() => { });
-    const localStreamRef = useRef<MediaStream | null>(null);
-    const aiWsRef = useRef<WebSocket | null>(null);
 
     const [isStreaming, setIsStreaming] = useState(false);
     const [videoLoaded, setVideoLoaded] = useState(false);
@@ -112,11 +111,11 @@ export default function StreamNode({
         });
     }, []);
 
-    // Keep drawDetections ref current
+    const drawDetectionsRef = useRef(drawDetections);
     drawDetectionsRef.current = drawDetections;
 
     /* ------------------------------------------------------------------ */
-    /*  PROVIDER: capture camera → send frames to backend via WebSocket    */
+    /*  PROVIDER: capture camera → send raw JPEG blobs via WebSocket       */
     /* ------------------------------------------------------------------ */
     useEffect(() => {
         if (!isClientCam || !isOwner) return;
@@ -125,6 +124,7 @@ export default function StreamNode({
         const wsUrl = getWsUrl();
 
         const startProvider = async () => {
+            if (!active) return;
             setNetState("starting_camera");
             try {
                 const streamObj = await navigator.mediaDevices.getUserMedia({
@@ -134,7 +134,6 @@ export default function StreamNode({
                 if (!active) { streamObj.getTracks().forEach(t => t.stop()); return; }
                 localStreamRef.current = streamObj;
 
-                // Show local preview in <video> element
                 if (videoRef.current) {
                     videoRef.current.srcObject = streamObj;
                     videoRef.current.muted = true;
@@ -144,18 +143,20 @@ export default function StreamNode({
                 setIsStreaming(true);
                 setNetState("broadcasting");
 
-                // Open WebSocket to send frames to backend
-                const aiWs = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
-                aiWsRef.current = aiWs;
+                // Open WebSocket — send raw binary JPEG blobs
+                const ws = new WebSocket(`${wsUrl}/ws/stream_in/${stream.id}`);
+                providerWsRef.current = ws;
                 let sending = false;
                 let captureInterval: ReturnType<typeof setInterval> | null = null;
 
                 const canvas = document.createElement("canvas");
                 const ctx = canvas.getContext("2d", { willReadFrequently: false });
 
-                aiWs.onopen = () => {
+                ws.binaryType = "arraybuffer";
+
+                ws.onopen = () => {
                     captureInterval = setInterval(() => {
-                        if (!active || aiWs.readyState !== WebSocket.OPEN || !videoRef.current) return;
+                        if (!active || ws.readyState !== WebSocket.OPEN || !videoRef.current) return;
                         if (videoRef.current.readyState < 2 || sending) return;
 
                         const vw = videoRef.current.videoWidth;
@@ -172,14 +173,9 @@ export default function StreamNode({
                         canvas.toBlob(
                             (blob) => {
                                 sending = false;
-                                if (!blob || aiWs.readyState !== WebSocket.OPEN) return;
-                                const reader = new FileReader();
-                                reader.onloadend = () => {
-                                    if (typeof reader.result === "string") {
-                                        aiWs.send(JSON.stringify({ type: "frame", frame: reader.result }));
-                                    }
-                                };
-                                reader.readAsDataURL(blob);
+                                if (!blob || ws.readyState !== WebSocket.OPEN) return;
+                                // Send raw binary — no base64, no JSON wrapping
+                                ws.send(blob);
                             },
                             "image/jpeg",
                             0.7,
@@ -187,7 +183,7 @@ export default function StreamNode({
                     }, 100); // ~10 FPS
                 };
 
-                aiWs.onclose = () => {
+                ws.onclose = () => {
                     if (captureInterval) clearInterval(captureInterval);
                     if (active) {
                         setNetState("reconnecting");
@@ -205,7 +201,7 @@ export default function StreamNode({
 
         return () => {
             active = false;
-            if (aiWsRef.current) { aiWsRef.current.close(); aiWsRef.current = null; }
+            if (providerWsRef.current) { providerWsRef.current.close(); providerWsRef.current = null; }
             if (localStreamRef.current) {
                 localStreamRef.current.getTracks().forEach(t => t.stop());
                 localStreamRef.current = null;
@@ -214,58 +210,66 @@ export default function StreamNode({
     }, [isClientCam, isOwner, stream.id]);
 
     /* ------------------------------------------------------------------ */
-    /*  VIEWER: receive frames + detections via WebSocket                   */
-    /*  (used by: non-owner client_cam viewers AND all server_cam/rtsp)     */
+    /*  VIEWER: receive binary frames + text detections via WebSocket       */
+    /*  (non-owner client_cam viewers AND all server_cam/rtsp viewers)      */
     /* ------------------------------------------------------------------ */
     useEffect(() => {
-        // Owners of client_cam see their local preview, not the WS relay
         if (isClientCam && isOwner) return;
 
         let active = true;
         const wsUrl = getWsUrl();
         let viewerWs: WebSocket | null = null;
         let pingInterval: ReturnType<typeof setInterval> | null = null;
-
         let loadedOnce = false;
+        // Track the previous object URL so we can revoke it (prevents memory leaks)
+        let prevBlobUrl: string | null = null;
 
         const connect = () => {
             if (!active) return;
             setNetState("connecting_ws");
             viewerWs = new WebSocket(`${wsUrl}/ws/stream_out/${stream.id}`);
+            viewerWs.binaryType = "blob";
 
             viewerWs.onopen = () => {
                 setNetState("streaming");
                 setIsStreaming(true);
                 pingInterval = setInterval(() => {
                     if (viewerWs?.readyState === WebSocket.OPEN) {
-                        viewerWs.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+                        viewerWs.send("ping");
                     }
                 }, 15000);
             };
 
             viewerWs.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-
-                    // Render frame if present
-                    if (data.type === "frame" && data.frame && imgRef.current) {
-                        imgRef.current.src = "data:image/jpeg;base64," + data.frame;
+                if (event.data instanceof Blob) {
+                    // Binary message = raw JPEG frame
+                    if (imgRef.current) {
+                        const url = URL.createObjectURL(event.data);
+                        if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+                        prevBlobUrl = url;
+                        imgRef.current.src = url;
                         if (!loadedOnce) { loadedOnce = true; setVideoLoaded(true); }
                     }
-
-                    // Draw detection overlay
-                    if (data.detections) {
-                        requestAnimationFrame(() => drawDetectionsRef.current(data.detections));
-                        onDetectionsRef.current(data.detections, data.timestamp);
-                    }
-                } catch { /* ignore */ }
+                } else if (typeof event.data === "string") {
+                    // Text message = detection JSON
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.detections) {
+                            requestAnimationFrame(() => drawDetectionsRef.current(data.detections));
+                            onDetectionsRef.current(data.detections, data.timestamp);
+                        }
+                    } catch { /* ignore */ }
+                }
             };
 
             viewerWs.onclose = () => {
-                if (pingInterval) clearInterval(pingInterval);
+                if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
                 setIsStreaming(false);
-                setVideoLoaded(false);
                 if (active) setTimeout(connect, 3000);
+            };
+
+            viewerWs.onerror = () => {
+                // Let onclose handle reconnection
             };
         };
 
@@ -275,11 +279,12 @@ export default function StreamNode({
             active = false;
             if (pingInterval) clearInterval(pingInterval);
             if (viewerWs) viewerWs.close();
+            if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
         };
     }, [isClientCam, isOwner, stream.id]);
 
     /* ------------------------------------------------------------------ */
-    /*  Provider also needs to receive detection results from backend       */
+    /*  PROVIDER detection overlay — subscribe to stream_out for AI results */
     /* ------------------------------------------------------------------ */
     useEffect(() => {
         if (!isClientCam || !isOwner) return;
@@ -292,24 +297,29 @@ export default function StreamNode({
         const connectDetWs = () => {
             if (!active) return;
             detWs = new WebSocket(`${wsUrl}/ws/stream_out/${stream.id}`);
+            detWs.binaryType = "blob"; // We'll ignore binary frames for the provider
+
             detWs.onopen = () => {
                 pingInterval = setInterval(() => {
                     if (detWs?.readyState === WebSocket.OPEN) {
-                        detWs.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+                        detWs.send("ping");
                     }
                 }, 15000);
             };
             detWs.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.detections) {
-                        requestAnimationFrame(() => drawDetectionsRef.current(data.detections));
-                        onDetectionsRef.current(data.detections, data.timestamp);
-                    }
-                } catch { /* ignore */ }
+                // Provider only cares about text detection messages, not binary frames
+                if (typeof event.data === "string") {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.detections) {
+                            requestAnimationFrame(() => drawDetectionsRef.current(data.detections));
+                            onDetectionsRef.current(data.detections, data.timestamp);
+                        }
+                    } catch { /* ignore */ }
+                }
             };
             detWs.onclose = () => {
-                if (pingInterval) clearInterval(pingInterval);
+                if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
                 if (active) setTimeout(connectDetWs, 3000);
             };
         };
@@ -340,7 +350,7 @@ export default function StreamNode({
             if (localStreamRef.current) {
                 localStreamRef.current.getTracks().forEach((t) => t.stop());
             }
-            if (aiWsRef.current) aiWsRef.current.close();
+            if (providerWsRef.current) providerWsRef.current.close();
             onDelete(stream.id, true);
         }
     };
@@ -371,7 +381,6 @@ export default function StreamNode({
                     {stream.name} [{stream.type.toUpperCase()}]
                 </span>
                 <div className="flex gap-2">
-                    {/* Audio mute toggle — only for provider with local video */}
                     {isClientCam && isOwner && (
                         <button
                             onClick={(e) => {
@@ -429,7 +438,7 @@ export default function StreamNode({
                     />
                 )}
 
-                {/* Image element — for all viewers (WS frame relay) */}
+                {/* Image element — for all viewers (binary WS frame relay) */}
                 {!(isClientCam && isOwner) && (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img

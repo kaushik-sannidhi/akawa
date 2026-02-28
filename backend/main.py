@@ -464,8 +464,8 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
 @app.websocket("/ws/stream_in/{stream_id}")
 async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     """
-    Receives JPEG frames from the camera provider.
-    Stores each frame for AI inference AND broadcasts it to all viewers.
+    Receives raw binary JPEG frames from the camera provider.
+    Decodes for AI inference and forwards raw bytes to all viewers.
     """
     import asyncio as _aio
 
@@ -479,29 +479,39 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     stream.status = "active"
     stream_manager.ensure_ai_task(stream)
 
-    def _decode_frame(b64_img: str):
-        """Decode base64 JPEG → cv2 frame (runs in thread pool)."""
-        raw = b64_img.split(',', 1)[-1] if ',' in b64_img else b64_img
-        img_bytes = base64.b64decode(raw)
-        np_arr = np.frombuffer(img_bytes, np.uint8)
+    def _decode_jpeg(jpeg_bytes: bytes):
+        """Decode raw JPEG bytes → cv2 frame (runs in thread pool)."""
+        np_arr = np.frombuffer(jpeg_bytes, np.uint8)
         return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
     try:
         while stream._running:
-            data = await websocket.receive_text()
-            payload = json.loads(data)
-            if payload.get("type") == "frame":
-                raw_b64 = payload["frame"]
-                # Strip the data:image/jpeg;base64, prefix for clean b64
-                clean_b64 = raw_b64.split(',', 1)[-1] if ',' in raw_b64 else raw_b64
+            message = await websocket.receive()
 
-                # Decode for AI (in thread)
-                frame = await _aio.to_thread(_decode_frame, raw_b64)
+            if "bytes" in message and message["bytes"]:
+                jpeg_bytes = message["bytes"]
+                # Decode for AI in thread pool
+                frame = await _aio.to_thread(_decode_jpeg, jpeg_bytes)
                 if frame is not None:
                     stream.latest_frame_cv2 = frame
+                # Forward raw bytes to all viewers instantly
+                from app.stream_manager import stream_manager as sm
+                sm._broadcast_bytes(stream, jpeg_bytes)
 
-                # Broadcast the frame to all viewers immediately
-                stream_manager.broadcast_client_frame(stream, clean_b64)
+            elif "text" in message and message["text"]:
+                # Legacy JSON fallback (older clients)
+                try:
+                    payload = json.loads(message["text"])
+                    if payload.get("type") == "frame" and payload.get("frame"):
+                        raw_b64 = payload["frame"]
+                        clean = raw_b64.split(',', 1)[-1] if ',' in raw_b64 else raw_b64
+                        jpeg_bytes = base64.b64decode(clean)
+                        frame = await _aio.to_thread(_decode_jpeg, jpeg_bytes)
+                        if frame is not None:
+                            stream.latest_frame_cv2 = frame
+                        sm._broadcast_bytes(stream, jpeg_bytes)
+                except Exception:
+                    pass  # ignore malformed text
 
     except WebSocketDisconnect:
         logger.info(f"[WS IN] Camera provider disconnected from stream {stream_id}")
@@ -518,8 +528,8 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
 @app.websocket("/ws/stream_out/{stream_id}")
 async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     """
-    All viewers subscribe here to receive frames + detection JSON.
-    Unified for client_cam, server_cam, and rtsp stream types.
+    Viewers subscribe here.
+    Binary messages = JPEG frames, Text messages = detection JSON.
     """
     await websocket.accept()
     stream = stream_manager.get_stream(stream_id)
@@ -531,8 +541,8 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     stream.viewer_wss.add(websocket)
     try:
         while stream._running and stream_manager.get_stream(stream_id):
-            # Keep connection alive; server pushes frame+detection data
-            await websocket.receive_text()
+            # Use generic receive() to handle text pings, binary, or disconnect
+            await websocket.receive()
     except WebSocketDisconnect:
         pass
     except Exception:

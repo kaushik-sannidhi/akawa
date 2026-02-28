@@ -4,7 +4,7 @@ import uuid
 import time
 import json
 import logging
-import base64
+import numpy as np
 from typing import Dict, List, Any, Set, Optional
 from fastapi import WebSocket
 
@@ -70,9 +70,6 @@ class StreamManager:
         elif stream.type == "client_cam":
             stream.status = "waiting_for_client"
             stream._running = True
-            # Only start AI loop if a provider will actually be feeding frames.
-            # Restored streams from Firebase have no provider yet — skip_ai
-            # prevents a busy-loop on latest_frame_cv2 == None.
             if not skip_ai:
                 stream._ai_task = asyncio.create_task(self._ai_loop(stream))
 
@@ -105,7 +102,6 @@ class StreamManager:
             await _safe_close(ws)
         stream.viewer_wss.clear()
 
-        # Remove from dict AFTER all connections are closed
         self.streams.pop(stream_id, None)
         logger.info(f"====== STREAM REMOVED: {stream_id} ======")
 
@@ -135,7 +131,6 @@ class StreamManager:
                 await asyncio.sleep(0.05)
                 continue
 
-            # Resize for performance
             height, width = frame.shape[:2]
             target_width = 800
             if width > target_width:
@@ -144,36 +139,16 @@ class StreamManager:
 
             stream.latest_frame_cv2 = frame
 
-            # Broadcast frame + latest detections to all viewers
+            # Encode and broadcast as raw binary JPEG
             ret_enc, buffer = await asyncio.to_thread(
                 cv2.imencode, '.jpg', frame,
                 [int(cv2.IMWRITE_JPEG_QUALITY), 65])
             if ret_enc:
-                b64_frame = base64.b64encode(buffer).decode('utf-8')
-                payload = {
-                    "type": "frame",
-                    "frame": b64_frame,
-                    "detections": stream.latest_detections,
-                    "timestamp": int(time.time() * 1000),
-                }
-                data_str = json.dumps(payload)
-                self._broadcast_to_viewers(stream, data_str)
+                self._broadcast_bytes(stream, buffer.tobytes())
 
             wait_time = target_time - time.time()
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
-
-    # ------------------------------------- Client cam broadcast (called from ws/stream_in)
-    def broadcast_client_frame(self, stream: Stream, b64_frame: str):
-        """Broadcast a base64-encoded JPEG frame from a client_cam provider to all viewers."""
-        payload = {
-            "type": "frame",
-            "frame": b64_frame,
-            "detections": stream.latest_detections,
-            "timestamp": int(time.time() * 1000),
-        }
-        data_str = json.dumps(payload)
-        self._broadcast_to_viewers(stream, data_str)
 
     # ------------------------------------------------------------------ AI loop
     async def _ai_loop(self, stream: Stream):
@@ -213,29 +188,38 @@ class StreamManager:
                         message=f"A {weapon_det.get('class_name', 'weapon').upper()} was detected with {int(weapon_det.get('confidence', 0) * 100)}% confidence."
                     )
 
-                # Broadcast detection update to viewers (for client_cam streams,
-                # the frame broadcast happens separately via broadcast_client_frame)
-                if stream.type == "client_cam":
-                    det_payload = json.dumps({
-                        "type": "detections",
-                        "detections": detections,
-                        "timestamp": int(time.time() * 1000),
-                    })
-                    if det_payload != last_det_json or detections:
-                        last_det_json = det_payload
-                        self._broadcast_to_viewers(stream, det_payload)
+                # Broadcast detection results as text JSON to all viewers
+                det_payload = json.dumps({
+                    "type": "detections",
+                    "detections": detections,
+                    "timestamp": int(time.time() * 1000),
+                })
+                if det_payload != last_det_json or detections:
+                    last_det_json = det_payload
+                    self._broadcast_text(stream, det_payload)
 
             except Exception as e:
                 logger.error(f"AI Loop error: {e}")
                 await asyncio.sleep(1)
 
     # ---------------------------------------------------------- Broadcast helpers
-    def _broadcast_to_viewers(self, stream: Stream, data_str: str):
-        """Send data to all viewer websocket subscribers."""
+    def _broadcast_bytes(self, stream: Stream, data: bytes):
+        """Send raw binary (JPEG frame) to all viewer WebSockets."""
         for ws in list(stream.viewer_wss):
-            asyncio.create_task(self._safe_ws_send(ws, data_str, stream.viewer_wss))
+            asyncio.create_task(self._safe_ws_send_bytes(ws, data, stream.viewer_wss))
 
-    async def _safe_ws_send(self, ws: WebSocket, data_str: str, wss_set: Set[WebSocket]):
+    def _broadcast_text(self, stream: Stream, data_str: str):
+        """Send text JSON (detections) to all viewer WebSockets."""
+        for ws in list(stream.viewer_wss):
+            asyncio.create_task(self._safe_ws_send_text(ws, data_str, stream.viewer_wss))
+
+    async def _safe_ws_send_bytes(self, ws: WebSocket, data: bytes, wss_set: Set[WebSocket]):
+        try:
+            await ws.send_bytes(data)
+        except Exception:
+            wss_set.discard(ws)
+
+    async def _safe_ws_send_text(self, ws: WebSocket, data_str: str, wss_set: Set[WebSocket]):
         try:
             await ws.send_text(data_str)
         except Exception:
