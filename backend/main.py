@@ -55,6 +55,49 @@ current_model_id = None
 global_detector = None
 
 
+def _restore_streams_from_firebase(uid_filter: str | None = None):
+    """
+    Ensure in-memory stream_manager includes streams stored in Firebase.
+    This keeps stream nodes visible across devices and backend restarts.
+    """
+    try:
+        target_url = f"{FIREBASE_RTDB_BASE}/streams.json"
+        if uid_filter:
+            target_url = (
+                f'{FIREBASE_RTDB_BASE}/streams.json?orderBy="$key"&equalTo="{uid_filter}"'
+            )
+
+        resp = requests.get(target_url, timeout=6)
+        if resp.status_code != 200:
+            return
+
+        streams_by_user = resp.json() or {}
+        if not isinstance(streams_by_user, dict):
+            return
+
+        for user_uid, streams_dict in streams_by_user.items():
+            if not isinstance(streams_dict, dict):
+                continue
+            for st_id, st_data in streams_dict.items():
+                if not isinstance(st_data, dict):
+                    continue
+                if stream_manager.get_stream(st_id):
+                    continue
+
+                stream_manager.add_stream(
+                    name=st_data.get("name", "Unknown"),
+                    stream_type=st_data.get("type", "rtsp"),
+                    source=st_data.get("source", "0"),
+                    uid=user_uid,
+                    model_id=st_data.get("model_id", "latest"),
+                    device_id=st_data.get("device_id", ""),
+                    stream_id=st_id,
+                )
+                print(f"[RESTORE] Restored stream {st_id} ({st_data.get('type', 'unknown')}) for {user_uid}")
+    except Exception as exc:
+        print(f"[RESTORE] Failed syncing streams from Firebase: {exc}")
+
+
 def get_detector(model_id: str = "latest"):
     global current_model_id, global_detector
 
@@ -91,42 +134,13 @@ def health_check():
 
 @app.on_event("startup")
 async def preload_model():
-    """Pre-load the YOLO detector at startup so the first WS connection isn't delayed."""
+    """Pre-load the YOLO detector at startup so the first WS connection is not delayed."""
     print("[STARTUP] Pre-loading YOLO weapon detector...")
     get_detector("latest")
-    
-    print("[STARTUP] Restoring persistent streams from Firebase...")
-    try:
-        resp = requests.get(f"{FIREBASE_RTDB_BASE}/streams.json")
-        if resp.status_code == 200 and resp.json():
-            streams_by_user = resp.json()
-            for user_uid, streams_dict in streams_by_user.items():
-                if isinstance(streams_dict, dict):
-                    for st_id, st_data in streams_dict.items():
-                        st_type = st_data.get("type", "rtsp")
-                        # client_cam streams are ephemeral — the browser must reconnect.
-                        # Delete them from Firebase on startup so they don't linger.
-                        if st_type == "client_cam":
-                            print(f"[STARTUP]   Removing stale client_cam stream {st_id} from Firebase")
-                            try:
-                                requests.delete(f"{FIREBASE_RTDB_BASE}/streams/{user_uid}/{st_id}.json")
-                            except Exception:
-                                pass
-                            continue
-                        # Only restore server_cam / rtsp streams that the backend can
-                        # drive on its own.
-                        stream_manager.add_stream(
-                            name=st_data.get("name", "Unknown"),
-                            stream_type=st_type,
-                            source=st_data.get("source", "0"),
-                            uid=user_uid,
-                            model_id=st_data.get("model_id", "latest"),
-                            device_id=st_data.get("device_id", ""),
-                            stream_id=st_id
-                        )
-    except Exception as e:
-        print(f"[STARTUP] Error restoring streams from Firebase: {e}")
-        
+
+    print("[STARTUP] Restoring streams from Firebase...")
+    _restore_streams_from_firebase()
+
     print("[STARTUP] YOLO weapon detector ready!")
 
 @app.post("/api/upload")
@@ -383,13 +397,10 @@ class StreamCreateRequest(BaseModel):
 
 @app.get("/api/streams")
 def list_streams(uid: str = "anonymous"):
-    """Return all active streams for this user.
+    """Return all active streams for this user."""
+    if uid and uid != "anonymous":
+        _restore_streams_from_firebase(uid)
 
-    The in-memory stream_manager is the source of truth while the backend
-    is running.  Firebase is only consulted at startup to restore persistent
-    (server_cam / rtsp) streams.  Streams are removed from Firebase when
-    explicitly deleted via DELETE /api/streams/{id}.
-    """
     all_streams = stream_manager.list_streams()
     user_streams = [s for s in all_streams if s.get("uid") == uid]
     return {"streams": user_streams}
@@ -424,7 +435,7 @@ async def create_stream(req: StreamCreateRequest):
 
 
     print(f"[API] POST /api/streams - Successfully created stream {stream.id}")
-    return {"status": "success", "stream_id": stream.id}
+    return {"status": "success", "stream_id": stream.id, "stream": stream.to_dict()}
 
 
 @app.delete("/api/streams/{stream_id}")

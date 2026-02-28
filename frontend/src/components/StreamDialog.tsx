@@ -2,16 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { Camera, Monitor, Globe, X } from "lucide-react";
-import { auth } from "@/lib/firebase";
 import { getBaseUrl } from "@/lib/config";
+import { useAuth } from "@/context/AuthContext";
 
 interface StreamDialogProps {
     isOpen: boolean;
     onClose: () => void;
-    onStreamAdded: () => void;
+    onStreamAdded: (stream?: any) => void;
 }
 
 export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamDialogProps) {
+    const { user } = useAuth();
     const [name, setName] = useState("");
     const [streamType, setStreamType] = useState<"rtsp" | "server_cam" | "client_cam">("server_cam");
     const [source, setSource] = useState("0");
@@ -60,7 +61,11 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
         }
 
         try {
-            const uid = auth.currentUser?.uid || "anonymous";
+            if (!user?.uid) {
+                throw new Error("AUTH_REQUIRED");
+            }
+
+            const uid = user.uid;
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 10000);
             const res = await fetch(`${getBaseUrl()}/api/streams`, {
@@ -83,7 +88,8 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                 throw new Error(errorText);
             }
 
-            onStreamAdded();
+            const data = await res.json();
+            onStreamAdded(data?.stream);
             onClose();
         } catch (err) {
             console.error("Failed to add stream", err);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import AlertSidebar from "@/components/AlertSidebar";
 import StreamNode from "@/components/StreamNode";
 import StreamDialog from "@/components/StreamDialog";
@@ -19,10 +19,10 @@ export default function LiveStreamPage() {
     const [primaryStreamId, setPrimaryStreamId] = useState<string | null>(null);
     const [alertsPanelOpen, setAlertsPanelOpen] = useState(false);
 
-    const fetchStreams = async () => {
-        if (loading) return;
+    const fetchStreams = useCallback(async () => {
+        if (loading || !user?.uid) return;
         try {
-            const uid = user?.uid || "anonymous";
+            const uid = user.uid;
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), 8000);
             const res = await fetch(`${getBaseUrl()}/api/streams?uid=${uid}&_t=${Date.now()}`, {
@@ -38,18 +38,19 @@ export default function LiveStreamPage() {
                 console.error("Failed to fetch streams (backend may be unreachable):", err.message);
             }
         }
-    };
+    }, [loading, user]);
 
     useEffect(() => {
         if (loading) return;
         fetchStreams();
         const interval = setInterval(fetchStreams, 5000);
         return () => clearInterval(interval);
-    }, [user, loading]);
+    }, [fetchStreams, loading]);
 
     const handleDeleteStream = async (id: string, cascadeDelete: boolean = true) => {
+        if (!user?.uid) return;
         try {
-            const uid = user?.uid || "anonymous";
+            const uid = user.uid;
             if (cascadeDelete) {
                 const res = await fetch(`${getBaseUrl()}/api/streams/${id}?uid=${uid}`, { method: "DELETE" });
                 if (!res.ok) console.warn(`Delete returned HTTP ${res.status}`);
@@ -231,7 +232,13 @@ export default function LiveStreamPage() {
             <StreamDialog
                 isOpen={isDialogOpen}
                 onClose={() => setIsDialogOpen(false)}
-                onStreamAdded={() => {
+                onStreamAdded={(newStream) => {
+                    if (newStream?.id) {
+                        setStreams(prev => {
+                            const exists = prev.some(s => s.id === newStream.id);
+                            return exists ? prev : [newStream, ...prev];
+                        });
+                    }
                     fetchStreams();
                     logSysEvent("[INFO] SENSOR PROXY DEPLOYED TO THREAT MATRIX");
                 }}

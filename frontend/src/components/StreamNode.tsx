@@ -267,6 +267,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
         let aiWs: WebSocket | null = null;
         let detWs: WebSocket | null = null;
         let captureInterval: ReturnType<typeof setInterval>;
+        let detPingInterval: ReturnType<typeof setInterval> | null = null;
         let reconnectTimeout: ReturnType<typeof setTimeout>;
 
         const wsUrl = getWsUrl();
@@ -460,6 +461,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
                 // 4. Also subscribe to detection results for own overlay
                 detWs = new WebSocket(`${wsUrl}/ws/stream_out/${stream.id}`);
+                detWs.onopen = () => {
+                    detPingInterval = setInterval(() => {
+                        if (detWs?.readyState === WebSocket.OPEN) {
+                            detWs.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+                        }
+                    }, 15000);
+                };
                 detWs.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
@@ -594,6 +602,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
                 // 2. Detection overlay WS
                 detWs = new WebSocket(`${wsUrl}/ws/stream_out/${stream.id}`);
+                detWs.onopen = () => {
+                    detPingInterval = setInterval(() => {
+                        if (detWs?.readyState === WebSocket.OPEN) {
+                            detWs.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+                        }
+                    }, 15000);
+                };
                 detWs.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
@@ -623,6 +638,11 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                     setWsState("connected");
                     setIsStreaming(true);
                     streamingRef.current = true;
+                    detPingInterval = setInterval(() => {
+                        if (detWs?.readyState === WebSocket.OPEN) {
+                            detWs.send(JSON.stringify({ type: "ping", ts: Date.now() }));
+                        }
+                    }, 15000);
                 };
                 detWs.onmessage = (event) => {
                     try {
@@ -675,6 +695,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             clearTimeout(startDelay);
             clearTimeout(reconnectTimeout);
             clearInterval(captureInterval);
+            if (detPingInterval) clearInterval(detPingInterval);
             stopLocalStream();
             if (signalWs) signalWs.close();
             if (aiWs) aiWs.close();
