@@ -572,16 +572,48 @@ class FastVisionAPI:
                  while len(frame_buffer) < SEQ_LEN:
                      frame_buffer.append(frame_buffer[-1] if frame_buffer else np.zeros((*IMG_SIZE, 5), dtype=np.float32))
                      
+                 # 1. Run Weapon Model on the last frame to emphasize weapon
+                 last_frame = frames[-1]
+                 weapon_results = self.weapon_model(last_frame, verbose=False)
+                 
+                 WEAPON_CLASSES = ["gun", "knife"]
+                 if hasattr(self.weapon_model, "names"):
+                     class_names = self.weapon_model.names
+                 else:
+                     class_names = getattr(self.weapon_model.model, "names", {0: "person", 1: "gun", 2: "knife"})
+                 
+                 weapon_confidences = []
+                 for r in weapon_results:
+                     boxes = r.boxes
+                     for i in range(len(boxes)):
+                         cls_id = int(boxes.cls[i].item())
+                         class_name = class_names[cls_id] if isinstance(class_names, dict) else (class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}")
+                         is_weapon = class_name in WEAPON_CLASSES or class_name == "weapon"
+                         if is_weapon:
+                             weapon_confidences.append(float(boxes.conf[i].item()))
+                 
+                 max_weapon_conf = max(weapon_confidences) if weapon_confidences else 0.0
+                 weapons_detected = max_weapon_conf > 0.5
+
+                 # 2. Run Violence/Brawl Model
                  sequence = np.array(frame_buffer[-SEQ_LEN:], dtype=np.float32)
                  sequence = np.expand_dims(sequence, axis=0) # Shape: (1, 20, 84, 84, 5)
                  prob = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
                  
-                 if prob > 0.6:
+                 violence_detected = prob > 0.6
+                 max_brawl_conf = prob
+                 
+                 # Emphasize weapon: if weapon is detected, it should not be classified as violence
+                 if weapons_detected:
+                     violence_detected = False
+                     max_brawl_conf = 0.0
+                     logger.info(f"[FastVision] Sequence Detection: WEAPON DETECTED in {video_name} (conf: {max_weapon_conf:.2f}), suppressing violence.")
+                 elif violence_detected:
                      logger.info(f"[FastVision] Sequence Detection: VIOLENCE DETECTED in {video_name} (conf: {prob:.2f})")
 
                  return FastVisionResponse(
-                      weapons_detected=False, weapon_confidence=0.0,
-                      violence_detected=prob > 0.6, violence_confidence=prob,
+                      weapons_detected=weapons_detected, weapon_confidence=max_weapon_conf,
+                      violence_detected=violence_detected, violence_confidence=max_brawl_conf,
                       fall_detected=False, fall_confidence=0.0,
                       sequence_violence_confidence=prob
                  )
@@ -715,6 +747,11 @@ class FastVisionAPI:
                 
                 max_brawl_conf = max(brawl_confidences) if brawl_confidences else 0.0
                 violence_detected = max_brawl_conf > 0.6 # Threshold from test script
+
+                # Emphasize weapon: a gun/knife shouldn't be classified as violence
+                if weapons_detected:
+                    violence_detected = False
+                    max_brawl_conf = 0.0
 
                 if weapons_detected or violence_detected or fall_detected:
                     logger.info(f"[FastVision] Video Analysis: ALERT for {video_name} - Weapon: {weapons_detected} ({max_weapon_conf:.2f}), Violence: {violence_detected} ({max_brawl_conf:.2f}), Fall: {fall_detected} ({max_fall_conf:.2f})")
