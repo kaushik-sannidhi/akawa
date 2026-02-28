@@ -1,2 +1,15 @@
 modal
 requests
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+opencv-python-headless
+torch
+torchvision
+ultralytics
+pillow
+numpy
+python-multipart
+websockets
+requests
+transformers
+timm
