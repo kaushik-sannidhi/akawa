@@ -20,10 +20,19 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Weapon Detection API")
 
-# Setup CORS
+# Setup CORS for local frontend + *.ingeniumstem.org deployments
+default_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+env_origins = os.getenv("BACKEND_CORS_ORIGINS", "")
+configured_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
+allow_origins = configured_origins if configured_origins else default_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
+    allow_origin_regex=r"https://([a-zA-Z0-9-]+\.)?ingeniumstem\.org",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

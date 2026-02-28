@@ -3,9 +3,9 @@ export const getBaseUrl = () => {
         return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
     }
 
-    // Default to the Cloudflare tunnel in production (Vercel)
+    // Default to the Cloudflare tunnel domain on non-local hosts
     if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-        return "https://backend.itsakawa.tech";
+        return "https://backend.ingeniumstem.org";
     }
 
     // Fallback for local development
@@ -24,9 +24,9 @@ export const getWsUrl = () => {
         return baseUrl.replace("http://", "ws://");
     }
 
-    // Default to secure Cloudflare wss in production (Vercel)
+    // Default to secure Cloudflare wss on non-local hosts
     if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-        return "wss://backend.itsakawa.tech";
+        return "wss://backend.ingeniumstem.org";
     }
 
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
