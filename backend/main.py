@@ -184,8 +184,14 @@ def health_check():
     """Simple health endpoint for tunnel / load-balancer probes."""
     return {
         "status": "ok",
-        "api": "modal_fastvision_proxy"
+        "api": "akawa-backend"
     }
+
+
+@app.get("/health")
+def root_health_check():
+    """Standard top-level health endpoint."""
+    return health_check()
 
 
 @app.on_event("startup")
