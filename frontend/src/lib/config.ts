@@ -5,7 +5,7 @@ export const getBaseUrl = () => {
 
     // Default to the Cloudflare tunnel in production (Vercel)
     if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-        return "https://ai.ingeniumstem.org";
+        return "https://backend.itsakawa.tech";
     }
 
     // Fallback for local development
@@ -26,7 +26,7 @@ export const getWsUrl = () => {
 
     // Default to secure Cloudflare wss in production (Vercel)
     if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-        return "wss://ai.ingeniumstem.org";
+        return "wss://backend.itsakawa.tech";
     }
 
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
