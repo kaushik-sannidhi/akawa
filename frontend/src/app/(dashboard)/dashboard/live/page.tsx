@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AlertSidebar from "@/components/AlertSidebar";
 import StreamNode from "@/components/StreamNode";
 import StreamDialog from "@/components/StreamDialog";
@@ -20,6 +20,9 @@ export default function LiveStreamPage() {
     const [primaryStreamId, setPrimaryStreamId] = useState<string | null>(null);
     const [alertsPanelOpen, setAlertsPanelOpen] = useState(false);
 
+    // Track IDs that are being deleted — prevents them from re-appearing via fetch
+    const deletingIdsRef = useRef<Set<string>>(new Set());
+
     const fetchStreams = useCallback(async () => {
         if (loading || !user?.uid) return;
         try {
@@ -33,7 +36,14 @@ export default function LiveStreamPage() {
             clearTimeout(timer);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-            if (data.streams) setStreams(data.streams);
+            if (data.streams) {
+                // Filter out any streams that are currently being deleted
+                const deleting = deletingIdsRef.current;
+                const filtered = deleting.size > 0
+                    ? data.streams.filter((s: any) => !deleting.has(s.id))
+                    : data.streams;
+                setStreams(filtered);
+            }
         } catch (err: any) {
             if (err.name !== 'AbortError') {
                 console.error("Failed to fetch streams (backend may be unreachable):", err.message);
@@ -51,26 +61,31 @@ export default function LiveStreamPage() {
     const handleDeleteStream = async (id: string, cascadeDelete: boolean = true) => {
         if (!user?.uid) return;
 
-        // Optimistic removal first so the UI updates immediately
+        // Add to the deleting set so polling won't re-add it
+        deletingIdsRef.current.add(id);
+
+        // Optimistic removal
         setStreams(prev => prev.filter(s => s.id !== id));
         logSysEvent(`[WARN] SENSOR PROXY ${id.substring(0, 6).toUpperCase()} TERMINATED`);
 
         try {
             const uid = user.uid;
             if (cascadeDelete) {
+                // Await the full backend delete (which also removes from Firebase)
                 const res = await fetch(`${getBaseUrl()}/api/streams/${id}?uid=${uid}`, { method: "DELETE" });
                 if (!res.ok) console.warn(`Delete returned HTTP ${res.status}`);
             }
-            // Short delay before re-fetching to give the backend time to fully
-            // clean up WebSocket connections so the deleted stream doesn't
-            // re-appear from a stale list.
-            await new Promise(r => setTimeout(r, 600));
-            fetchStreams();
         } catch (err: any) {
             console.error("Failed to delete stream:", err.message);
-            // Still re-fetch to reconcile state even on error
-            fetchStreams();
         }
+
+        // Wait, then re-fetch and clear the guard after an extra grace period
+        await new Promise(r => setTimeout(r, 1500));
+        await fetchStreams();
+        // Keep the guard for a bit longer so subsequent polls don't re-add it
+        setTimeout(() => {
+            deletingIdsRef.current.delete(id);
+        }, 15000);
     };
 
     const handleDetections = (detections: any[], timestamp: number) => {

@@ -50,13 +50,40 @@ os.makedirs(LIVE_EVENTS_DIR, exist_ok=True)
 
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
 
+import time as _time
+
+# Track recently-deleted stream IDs so _restore won't re-add them from Firebase
+# Maps stream_id -> deletion timestamp
+_recently_deleted: Dict[str, float] = {}
+_DELETED_COOLDOWN = 30.0  # seconds to block re-restore after delete
+
+
+def _mark_deleted(stream_id: str):
+    """Mark a stream as recently deleted so restore won't re-add it."""
+    _recently_deleted[stream_id] = _time.time()
+    # Prune old entries
+    cutoff = _time.time() - _DELETED_COOLDOWN * 2
+    for sid in list(_recently_deleted):
+        if _recently_deleted[sid] < cutoff:
+            del _recently_deleted[sid]
+
+
+def _is_recently_deleted(stream_id: str) -> bool:
+    ts = _recently_deleted.get(stream_id)
+    if ts is None:
+        return False
+    if _time.time() - ts > _DELETED_COOLDOWN:
+        del _recently_deleted[stream_id]
+        return False
+    return True
+
+
 def _restore_streams_from_firebase(uid_filter: str | None = None):
     """
     Ensure in-memory stream_manager includes streams stored in Firebase.
     This keeps stream nodes visible across devices and backend restarts.
     """
     try:
-        # Ignore uid_filter to make streams globally visible to everyone
         target_url = f"{FIREBASE_RTDB_BASE}/streams.json"
 
         resp = requests.get(target_url, timeout=6)
@@ -73,7 +100,10 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
             for st_id, st_data in streams_dict.items():
                 if not isinstance(st_data, dict):
                     continue
+                # Skip if already in memory or recently deleted
                 if stream_manager.get_stream(st_id):
+                    continue
+                if _is_recently_deleted(st_id):
                     continue
 
                 stream_manager.add_stream(
@@ -85,7 +115,7 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     device_id=st_data.get("device_id", ""),
                     stream_id=st_id,
                     skip_ai=(st_data.get("type") == "client_cam"),
-                    cf_session_id=st_data.get("cf_session_id", ""),
+                    cf_meeting_id=st_data.get("cf_meeting_id", ""),
                 )
                 print(f"[RESTORE] Restored stream {st_id} ({st_data.get('type', 'unknown')}) for {user_uid}")
     except Exception as exc:
@@ -528,19 +558,19 @@ async def list_streams(uid: str = "anonymous"):
 async def create_stream(req: StreamCreateRequest):
     print(f"\n[API] POST /api/streams - Received request to create stream: {req.name}, type: {req.stream_type}")
 
-    # Provision Cloudflare Calls session for client_cam streams
-    cf_session_id = ""
+    # Provision Cloudflare Realtime Kit meeting for client_cam streams
+    cf_meeting_id = ""
     if req.stream_type == "client_cam":
         try:
-            from app.cloudflare_realtime import create_session
-            session = create_session()
-            if session:
-                cf_session_id = session["sessionId"]
-                print(f"[API] Created Cloudflare Calls session: {cf_session_id}")
+            from app.cloudflare_realtime import create_meeting
+            meeting = create_meeting(title=req.name)
+            if meeting:
+                cf_meeting_id = meeting["meeting_id"]
+                print(f"[API] Created Cloudflare Realtime Kit meeting: {cf_meeting_id}")
             else:
-                print("[API] Cloudflare Calls not configured — using legacy WS relay only")
+                print("[API] Cloudflare Realtime Kit not configured — using legacy WS relay only")
         except Exception as e:
-            print(f"[API] Cloudflare Calls provisioning failed: {e}")
+            print(f"[API] Cloudflare Realtime Kit provisioning failed: {e}")
 
     stream = stream_manager.add_stream(
         name=req.name,
@@ -549,7 +579,7 @@ async def create_stream(req: StreamCreateRequest):
         uid=req.uid,
         model_id=req.model_id,
         device_id=req.device_id,
-        cf_session_id=cf_session_id,
+        cf_meeting_id=cf_meeting_id,
     )
     
     # Save to Firebase
@@ -562,7 +592,7 @@ async def create_stream(req: StreamCreateRequest):
             "model_id": req.model_id,
             "device_id": req.device_id,
             "created_at": __import__("datetime").datetime.now().isoformat(),
-            "cf_session_id": cf_session_id,
+            "cf_meeting_id": cf_meeting_id,
         }
         requests.put(f"{FIREBASE_RTDB_BASE}/streams/{req.uid}/{stream.id}.json", json=stream_data)
     except Exception as e:
@@ -576,17 +606,42 @@ async def create_stream(req: StreamCreateRequest):
 @app.delete("/api/streams/{stream_id}")
 async def delete_stream(stream_id: str, uid: str = "anonymous"):
     print(f"\n[API] DELETE /api/streams/{stream_id} - Received request to delete stream")
+
+    # Mark as recently deleted FIRST so restore won't re-add it
+    _mark_deleted(stream_id)
+
     stream = stream_manager.get_stream(stream_id)
     stream_uid = stream.uid if stream else uid
 
     await stream_manager.remove_stream(stream_id)
     
-    # Remove from Firebase
+    # Remove from Firebase — try the known uid path first
+    deleted_from_firebase = False
     try:
-        requests.delete(f"{FIREBASE_RTDB_BASE}/streams/{stream_uid}/{stream_id}.json")
+        resp = requests.delete(
+            f"{FIREBASE_RTDB_BASE}/streams/{stream_uid}/{stream_id}.json",
+            timeout=6,
+        )
+        if resp.status_code in (200, 204):
+            deleted_from_firebase = True
     except Exception as e:
-        print(f"[API] DELETE /api/streams/{stream_id} - Failed to remove stream from Firebase: {e}")
+        print(f"[API] DELETE /api/streams/{stream_id} - Firebase delete failed for uid {stream_uid}: {e}")
 
+    # If uid was "anonymous" or the delete didn't find it, scan all users
+    if not deleted_from_firebase or stream_uid == "anonymous":
+        try:
+            all_streams = requests.get(f"{FIREBASE_RTDB_BASE}/streams.json", timeout=6)
+            if all_streams.status_code == 200:
+                data = all_streams.json() or {}
+                for fb_uid, fb_streams in data.items():
+                    if isinstance(fb_streams, dict) and stream_id in fb_streams:
+                        requests.delete(
+                            f"{FIREBASE_RTDB_BASE}/streams/{fb_uid}/{stream_id}.json",
+                            timeout=4,
+                        )
+                        print(f"[API] DELETE /api/streams/{stream_id} - Cleaned up from Firebase under uid {fb_uid}")
+        except Exception as e:
+            print(f"[API] DELETE /api/streams/{stream_id} - Firebase scan-delete failed: {e}")
 
     print(f"[API] DELETE /api/streams/{stream_id} - Successfully deleted stream")
     return {"status": "success"}
@@ -718,101 +773,44 @@ async def websocket_detections(websocket: WebSocket, stream_id: str):
         logger.info(f"[WS DET] Detection subscriber disconnected from stream {stream_id}")
 
 
-# ==================== Cloudflare Calls (Realtime SFU) API Endpoints ====================
+# ==================== Cloudflare Realtime Kit Endpoints ====================
 
 
-class CallsSessionRequest(BaseModel):
+class RealtimeJoinRequest(BaseModel):
     stream_id: str
+    participant_name: str = "viewer"
+    device_id: str = ""
 
 
-class CallsPublishRequest(BaseModel):
-    stream_id: str
-    session_id: str
-    sdp_offer: str
-    track_name: str
-
-
-class CallsSubscribeRequest(BaseModel):
-    stream_id: str
-    session_id: str
-    publisher_session_id: str
-    sdp_offer: str
-    track_name: str
-
-
-class CallsRenegotiateRequest(BaseModel):
-    session_id: str
-    sdp_offer: str
-
-
-@app.post("/api/calls/session")
-async def calls_create_session(req: CallsSessionRequest):
-    """Create a new Cloudflare Calls session for a stream."""
-    from app.cloudflare_realtime import create_session
-    session = create_session()
-    if not session:
-        return {"error": "Cloudflare Calls not configured or session creation failed"}, 500
-    return {"sessionId": session["sessionId"]}
-
-
-@app.post("/api/calls/publish")
-async def calls_publish(req: CallsPublishRequest):
-    """Push a track (publish video) to the Cloudflare Calls SFU."""
-    from app.cloudflare_realtime import push_track
-
-    result = push_track(req.session_id, req.sdp_offer, req.track_name)
-    if not result:
-        return {"error": "Failed to push track to Cloudflare Calls SFU"}, 500
-
-    # Store the publisher session ID on the stream so viewers can find it
+@app.post("/api/realtime/join")
+async def realtime_join(req: RealtimeJoinRequest):
+    """
+    Join a Realtime Kit meeting for a stream.
+    Returns an auth token that the frontend SDK uses to connect.
+    Both publishers and viewers call this — the SDK handles the rest.
+    """
     stream = stream_manager.get_stream(req.stream_id)
-    if stream:
-        stream.cf_session_id = req.session_id
-        # Update Firebase with the session ID
-        try:
-            requests.patch(
-                f"{FIREBASE_RTDB_BASE}/streams/{stream.uid}/{stream.id}.json",
-                json={"cf_session_id": req.session_id},
-                timeout=4,
-            )
-        except Exception:
-            pass
+    if not stream or not stream.cf_meeting_id:
+        return {"error": "Stream not found or Realtime Kit not configured"}, 404
 
-    return {
-        "sdp_answer": result.get("sdp_answer", ""),
-        "tracks": result.get("tracks", []),
-        "requiresImmediateRenegotiation": result.get("requiresImmediateRenegotiation", False),
-    }
+    from app.cloudflare_realtime import add_participant
 
-
-@app.post("/api/calls/subscribe")
-async def calls_subscribe(req: CallsSubscribeRequest):
-    """Pull a track (subscribe/view) from the Cloudflare Calls SFU."""
-    from app.cloudflare_realtime import pull_track
-
-    result = pull_track(
-        req.session_id, req.sdp_offer, req.track_name, req.publisher_session_id
+    # Use device_id as participant ID so the same device reconnects to the same slot
+    pid = req.device_id or f"anon-{__import__('uuid').uuid4().hex[:12]}"
+    result = add_participant(
+        meeting_id=stream.cf_meeting_id,
+        participant_id=pid,
+        name=req.participant_name,
+        preset="group_call_host",
     )
     if not result:
-        return {"error": "Failed to pull track from Cloudflare Calls SFU"}, 500
+        return {"error": "Failed to add participant to Realtime Kit meeting"}, 500
 
     return {
-        "sdp_answer": result.get("sdp_answer", ""),
-        "tracks": result.get("tracks", []),
-        "requiresImmediateRenegotiation": result.get("requiresImmediateRenegotiation", False),
+        "auth_token": result["token"],
+        "participant_id": result["participant_id"],
+        "meeting_id": stream.cf_meeting_id,
     }
-
-
-@app.post("/api/calls/renegotiate")
-async def calls_renegotiate(req: CallsRenegotiateRequest):
-    """Renegotiate an existing Cloudflare Calls session."""
-    from app.cloudflare_realtime import renegotiate
-
-    answer = renegotiate(req.session_id, req.sdp_offer)
-    if answer is None:
-        return {"error": "Renegotiation failed"}, 500
-
-    return {"sdp_answer": answer}
 
 
 @app.get("/api/turn-credentials")

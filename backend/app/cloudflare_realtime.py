@@ -1,235 +1,178 @@
 """
-Cloudflare Calls (Realtime SFU) + TURN service.
+Cloudflare Realtime Kit — Meetings & Participants API + TURN credentials.
 
-Uses Cloudflare Calls API for WebRTC SFU-based live streaming
-and Cloudflare TURN for NAT traversal across devices/networks.
+Uses the Cloudflare Realtime Kit API (built on Dyte) for WebRTC live
+streaming via their global SFU network.  Each "stream" maps to a
+Realtime Kit "meeting".  Publishers and viewers join as participants
+and receive auth tokens that the frontend SDK consumes.
 
 Env vars required:
-    CF_APP_ID      – Cloudflare Calls App ID
-    CF_APP_SECRET  – Cloudflare Calls App Secret (bearer token)
-    CF_TURN_KEY_ID – Cloudflare TURN token key ID
-    CF_TURN_API_TOKEN – Cloudflare TURN API token
+    CF_ACCOUNT_ID      – Cloudflare account ID
+    CF_REALTIME_APP_ID – Realtime Kit App ID (from Cloudflare dashboard → Calls → Realtime Kit)
+    CF_REALTIME_TOKEN  – Cloudflare API token with "Realtime" or "Realtime Admin" permission
+    CF_TURN_KEY_ID     – (optional) Cloudflare TURN key ID for extra NAT traversal
+    CF_TURN_API_TOKEN  – (optional) Cloudflare TURN API token
 """
 
 import os
 import logging
 import requests
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-CF_APP_ID = os.getenv("CF_APP_ID", "")
-CF_APP_SECRET = os.getenv("CF_APP_SECRET", "")
+CF_ACCOUNT_ID = os.getenv("CF_ACCOUNT_ID", "")
+CF_REALTIME_APP_ID = os.getenv("CF_REALTIME_APP_ID", "")
+CF_REALTIME_TOKEN = os.getenv("CF_REALTIME_TOKEN", "")
 CF_TURN_KEY_ID = os.getenv("CF_TURN_KEY_ID", "")
 CF_TURN_API_TOKEN = os.getenv("CF_TURN_API_TOKEN", "")
 
-CALLS_API_BASE = f"https://rtc.live.cloudflare.com/v1/apps/{CF_APP_ID}"
+_BASE = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/realtime/kit/{CF_REALTIME_APP_ID}"
 
-def _calls_headers():
+
+def _headers():
     return {
-        "Authorization": f"Bearer {CF_APP_SECRET}",
+        "Authorization": f"Bearer {CF_REALTIME_TOKEN}",
         "Content-Type": "application/json",
     }
 
 
 def is_configured() -> bool:
-    """Check if Cloudflare Calls is configured."""
-    return bool(CF_APP_ID and CF_APP_SECRET)
+    return bool(CF_ACCOUNT_ID and CF_REALTIME_APP_ID and CF_REALTIME_TOKEN)
 
 
-def create_session() -> Optional[Dict[str, Any]]:
+# ────────────────────────────────────── Meetings ──────────────────────────────
+
+def create_meeting(title: str) -> Optional[Dict[str, Any]]:
     """
-    Create a new Cloudflare Calls session.
-    Returns {"sessionId": "..."} or None.
+    Create a Realtime Kit meeting.
+    Returns { "meeting_id": ..., "title": ..., ... } or None.
     """
     if not is_configured():
-        logger.warning("Cloudflare Calls not configured. Set CF_APP_ID and CF_APP_SECRET.")
+        logger.warning("Cloudflare Realtime Kit not configured.")
         return None
 
     try:
         resp = requests.post(
-            f"{CALLS_API_BASE}/sessions/new",
+            f"{_BASE}/meetings",
+            json={"title": title},
+            headers=_headers(),
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            body = resp.json()
+            if body.get("success"):
+                data = body["data"]
+                logger.info(f"Created Realtime Kit meeting {data['id']} — {title}")
+                return {
+                    "meeting_id": data["id"],
+                    "title": data.get("title", title),
+                }
+        logger.error(f"create_meeting failed: {resp.status_code} {resp.text[:400]}")
+        return None
+    except Exception as exc:
+        logger.error(f"create_meeting exception: {exc}")
+        return None
+
+
+def close_meeting(meeting_id: str) -> bool:
+    """
+    Kick all participants from a meeting (effectively closes it).
+    """
+    if not is_configured() or not meeting_id:
+        return False
+    try:
+        resp = requests.post(
+            f"{_BASE}/meetings/{meeting_id}/active-session/kick-all",
             json={},
-            headers=_calls_headers(),
+            headers=_headers(),
             timeout=10,
         )
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            session_id = data.get("sessionId", "")
-            if session_id:
-                logger.info(f"Created Cloudflare Calls session: {session_id}")
-                return {"sessionId": session_id}
-        logger.error(f"CF Calls create_session failed: {resp.status_code} {resp.text[:300]}")
-        return None
+        ok = resp.status_code in (200, 201, 204)
+        if ok:
+            logger.info(f"Closed meeting {meeting_id}")
+        return ok
     except Exception as exc:
-        logger.error(f"CF Calls create_session exception: {exc}")
-        return None
-
-
-def push_track(session_id: str, sdp_offer: str, track_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Push a track (publish) to a Cloudflare Calls session.
-
-    The publisher sends their SDP offer with a sendonly transceiver.
-    Returns the SDP answer and track info from the SFU.
-    """
-    if not is_configured() or not session_id:
-        return None
-
-    try:
-        payload = {
-            "sessionDescription": {
-                "type": "offer",
-                "sdp": sdp_offer,
-            },
-            "tracks": [
-                {
-                    "location": "local",
-                    "trackName": track_name,
-                    "mid": "0",  # first media section for video
-                },
-            ],
-        }
-
-        resp = requests.post(
-            f"{CALLS_API_BASE}/sessions/{session_id}/tracks/new",
-            json=payload,
-            headers=_calls_headers(),
-            timeout=10,
-        )
-
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            return {
-                "sdp_answer": data.get("sessionDescription", {}).get("sdp", ""),
-                "tracks": data.get("tracks", []),
-                "requiresImmediateRenegotiation": data.get("requiresImmediateRenegotiation", False),
-            }
-
-        logger.error(f"CF Calls push_track failed: {resp.status_code} {resp.text[:300]}")
-        return None
-    except Exception as exc:
-        logger.error(f"CF Calls push_track exception: {exc}")
-        return None
-
-
-def pull_track(session_id: str, sdp_offer: str, track_name: str,
-               publisher_session_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Pull a track (subscribe/view) from a Cloudflare Calls session.
-
-    The viewer sends an SDP offer with a recvonly transceiver.
-    Returns the SDP answer from the SFU.
-    """
-    if not is_configured() or not session_id:
-        return None
-
-    try:
-        payload = {
-            "sessionDescription": {
-                "type": "offer",
-                "sdp": sdp_offer,
-            },
-            "tracks": [
-                {
-                    "location": "remote",
-                    "trackName": track_name,
-                    "sessionId": publisher_session_id,
-                    "mid": "0",
-                },
-            ],
-        }
-
-        resp = requests.post(
-            f"{CALLS_API_BASE}/sessions/{session_id}/tracks/new",
-            json=payload,
-            headers=_calls_headers(),
-            timeout=10,
-        )
-
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            return {
-                "sdp_answer": data.get("sessionDescription", {}).get("sdp", ""),
-                "tracks": data.get("tracks", []),
-                "requiresImmediateRenegotiation": data.get("requiresImmediateRenegotiation", False),
-            }
-
-        logger.error(f"CF Calls pull_track failed: {resp.status_code} {resp.text[:300]}")
-        return None
-    except Exception as exc:
-        logger.error(f"CF Calls pull_track exception: {exc}")
-        return None
-
-
-def renegotiate(session_id: str, sdp_offer: str) -> Optional[str]:
-    """
-    Renegotiate an existing session (e.g., after adding tracks).
-    Returns the new SDP answer or None.
-    """
-    if not is_configured() or not session_id:
-        return None
-
-    try:
-        payload = {
-            "sessionDescription": {
-                "type": "offer",
-                "sdp": sdp_offer,
-            },
-        }
-
-        resp = requests.put(
-            f"{CALLS_API_BASE}/sessions/{session_id}/renegotiate",
-            json=payload,
-            headers=_calls_headers(),
-            timeout=10,
-        )
-
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            return data.get("sessionDescription", {}).get("sdp", "")
-
-        logger.error(f"CF Calls renegotiate failed: {resp.status_code} {resp.text[:300]}")
-        return None
-    except Exception as exc:
-        logger.error(f"CF Calls renegotiate exception: {exc}")
-        return None
-
-
-def close_session(session_id: str) -> bool:
-    """Close/cleanup a Cloudflare Calls session."""
-    if not is_configured() or not session_id:
-        return False
-
-    try:
-        # Cloudflare Calls sessions auto-expire, but we can close tracks
-        # There's no explicit delete endpoint; sessions auto-close when all
-        # tracks are removed. This is a best-effort cleanup.
-        return True
-    except Exception as exc:
-        logger.error(f"CF Calls close_session exception: {exc}")
+        logger.error(f"close_meeting exception: {exc}")
         return False
 
 
-def get_turn_credentials() -> Optional[Dict[str, Any]]:
-    """
-    Get TURN server credentials from Cloudflare TURN service.
+# ─────────────────────────────────── Participants ─────────────────────────────
 
-    Returns ICE server config suitable for RTCPeerConnection:
-    {
-        "iceServers": [
-            {"urls": "stun:stun.cloudflare.com:3478"},
-            {"urls": "turn:turn.cloudflare.com:3478", "username": "...", "credential": "..."},
-            {"urls": "turns:turn.cloudflare.com:5349", "username": "...", "credential": "..."},
-        ]
-    }
+def add_participant(
+    meeting_id: str,
+    participant_id: str,
+    name: str = "participant",
+    preset: str = "group_call_host",
+) -> Optional[Dict[str, Any]]:
     """
-    # If TURN credentials are configured, use the Cloudflare TURN API
+    Add a participant to a meeting and get their auth token.
+    The token is passed to the frontend SDK for joining.
+
+    preset="group_call_host" gives publish+subscribe permissions.
+
+    Returns { "participant_id": ..., "token": ... } or None.
+    """
+    if not is_configured() or not meeting_id:
+        return None
+
+    try:
+        payload = {
+            "custom_participant_id": participant_id,
+            "name": name,
+            "preset_name": preset,
+        }
+        resp = requests.post(
+            f"{_BASE}/meetings/{meeting_id}/participants",
+            json=payload,
+            headers=_headers(),
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            body = resp.json()
+            if body.get("success"):
+                data = body["data"]
+                logger.info(f"Added participant {data['id']} to meeting {meeting_id}")
+                return {
+                    "participant_id": data["id"],
+                    "token": data["token"],
+                    "custom_participant_id": data.get("custom_participant_id", participant_id),
+                }
+        logger.error(f"add_participant failed: {resp.status_code} {resp.text[:400]}")
+        return None
+    except Exception as exc:
+        logger.error(f"add_participant exception: {exc}")
+        return None
+
+
+def remove_participant(meeting_id: str, participant_id: str) -> bool:
+    """Remove / kick a participant from a meeting."""
+    if not is_configured() or not meeting_id or not participant_id:
+        return False
+    try:
+        resp = requests.delete(
+            f"{_BASE}/meetings/{meeting_id}/participants/{participant_id}",
+            headers=_headers(),
+            timeout=10,
+        )
+        return resp.status_code in (200, 204)
+    except Exception as exc:
+        logger.error(f"remove_participant exception: {exc}")
+        return False
+
+
+# ────────────────────────────────── TURN credentials ──────────────────────────
+
+def get_turn_credentials() -> Dict[str, Any]:
+    """
+    Fetch short-lived TURN credentials from Cloudflare.
+    Falls back to STUN-only if TURN is not configured.
+    """
     if CF_TURN_KEY_ID and CF_TURN_API_TOKEN:
         try:
             resp = requests.post(
-                "https://rtc.live.cloudflare.com/v1/turn/keys/" + CF_TURN_KEY_ID + "/credentials/generate",
-                json={"ttl": 86400},  # 24 hour TTL
+                f"https://rtc.live.cloudflare.com/v1/turn/keys/{CF_TURN_KEY_ID}/credentials/generate",
+                json={"ttl": 86400},
                 headers={
                     "Authorization": f"Bearer {CF_TURN_API_TOKEN}",
                     "Content-Type": "application/json",
@@ -238,10 +181,9 @@ def get_turn_credentials() -> Optional[Dict[str, Any]]:
             )
             if resp.status_code in (200, 201):
                 data = resp.json()
-                ice_servers = data.get("iceServers", {})
-                username = ice_servers.get("username", "")
-                credential = ice_servers.get("credential", "")
-
+                ice = data.get("iceServers", {})
+                username = ice.get("username", "")
+                credential = ice.get("credential", "")
                 if username and credential:
                     return {
                         "iceServers": [
@@ -257,15 +199,13 @@ def get_turn_credentials() -> Optional[Dict[str, Any]]:
                             },
                         ]
                     }
-            logger.warning(f"CF TURN credentials request failed: {resp.status_code}")
+            logger.warning(f"TURN credential request failed: {resp.status_code}")
         except Exception as exc:
-            logger.error(f"CF TURN credentials exception: {exc}")
+            logger.error(f"TURN credential exception: {exc}")
 
-    # Fallback: STUN only (works on same network, may fail across NAT)
     return {
         "iceServers": [
             {"urls": "stun:stun.cloudflare.com:3478"},
             {"urls": "stun:stun.l.google.com:19302"},
         ]
     }
-

@@ -38,8 +38,8 @@ class Stream:
         self.latest_frame_b64: str = ""  # base64 JPEG for viewer broadcast
         self.last_alert_event_ts: int = 0
 
-        # Cloudflare Calls (Realtime SFU) session ID
-        self.cf_session_id: str = ""
+        # Cloudflare Realtime Kit meeting ID
+        self.cf_meeting_id: str = ""
 
         # Alert clipping: track ongoing alert window
         self.alert_active: bool = False
@@ -67,7 +67,7 @@ class Stream:
             "device_id": self.device_id,
             "status": self.status,
             "subscriber_count": len(self.viewer_wss) + len(self.detection_wss),
-            "cf_session_id": self.cf_session_id,
+            "cf_meeting_id": self.cf_meeting_id,
         }
 
 
@@ -79,13 +79,13 @@ class StreamManager:
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
                    model_id: str = "latest", device_id: str = "",
                    stream_id: str = None, skip_ai: bool = False,
-                   cf_session_id: str = "") -> Stream:
+                   cf_meeting_id: str = "") -> Stream:
         stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id)
-        stream.cf_session_id = cf_session_id
+        stream.cf_meeting_id = cf_meeting_id
 
         self.streams[stream.id] = stream
         logger.info(f"====== NEW STREAM CREATED ======")
-        logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai} | CF Calls: {bool(cf_session_id)}")
+        logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai} | CF Meeting: {bool(cf_meeting_id)}")
 
         self._update_telemetry_nodes(uid)
 
@@ -125,13 +125,13 @@ class StreamManager:
         if stream._broadcast_task:
             stream._broadcast_task.cancel()
 
-        # Cleanup Cloudflare Calls session
-        if stream.cf_session_id:
+        # Cleanup Cloudflare Realtime Kit meeting
+        if stream.cf_meeting_id:
             try:
-                from app.cloudflare_realtime import close_session
-                close_session(stream.cf_session_id)
+                from app.cloudflare_realtime import close_meeting
+                close_meeting(stream.cf_meeting_id)
             except Exception as exc:
-                logger.error(f"Failed to close CF Calls session {stream.cf_session_id}: {exc}")
+                logger.error(f"Failed to close CF meeting {stream.cf_meeting_id}: {exc}")
 
         async def _safe_close(ws):
             try:
