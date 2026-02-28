@@ -378,7 +378,7 @@ export default function LandingPage() {
                             <div className="max-w-2xl font-mono text-sm leading-relaxed text-[var(--color-silica)] mb-12 border-l-[4px] border-[var(--color-alert)] pl-4 bg-[var(--color-void)] p-4 border-y border-r border-[#333]">
                                 <p className="mb-4 text-[var(--color-alert)] font-bold">// TWO-STAGE ARCHITECTURE:</p>
                                 <p>
-                                    TRANSFORM PASSIVE CAMPUS HARDWARE INTO AN UNBLINKING PROACTIVE DEFENSE GRID. <span className="text-white font-bold bg-[#333] px-1">YOLOv11</span> FOR RAPID WEAPON CLASSIFICATION. <span className="text-white font-bold bg-[#333] px-1">BEHAVIORAL AI</span> FOR KINEMATIC STANCE TRACKING.
+                                    TRANSFORM PASSIVE CAMPUS HARDWARE INTO AN UNBLINKING PROACTIVE DEFENSE GRID. <span className="text-white font-bold bg-[#333] px-1">YOLOv11</span> FOR RAPID WEAPON CLASSIFICATION. <span className="text-white font-bold bg-[#333] px-1">LMST MODEL</span> FOR KINEMATIC STANCE TRACKING.
                                 </p>
                             </div>
 
@@ -532,7 +532,7 @@ export default function LandingPage() {
                 <section ref={axiomRef} className="gsap-reveal border-b-[2px] border-[var(--color-iron)] bg-[var(--color-data)] text-black relative">
                     <div className="grid grid-cols-1 lg:grid-cols-12 min-h-[50vh]">
                         <div className="lg:col-span-4 p-8 md:p-16 border-b-[2px] lg:border-b-0 lg:border-r-[2px] border-[var(--color-iron)] bg-[var(--color-void)] text-[var(--color-data)] flex flex-col justify-center">
-                            <h2 className="text-5xl md:text-6xl lg:text-7xl font-black tracking-tighter leading-none mb-6">AI<br />POWERED</h2>
+                            <h2 className="text-5xl md:text-6xl lg:text-5xl xl:text-7xl font-black tracking-tighter leading-none mb-6">AI<br />POWERED</h2>
                             <p className="font-mono text-xs text-[var(--color-silica)]">
                                 HUMANS CANNOT MONITOR THOUSANDS OF FEEDS SIMULTANEOUSLY. WE REMOVE THE HUMAN LIMITATION FROM THE DETECTION LOOP.
                             </p>
@@ -697,43 +697,56 @@ export default function LandingPage() {
                                     <span>[ SYSTEM SCHEMATIC ]</span>
                                     <span className="animate-pulse">ONLINE</span>
                                 </div>
-                                <svg viewBox="0 0 580 170" className="w-full h-full z-10 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)] overflow-visible">
+                                <svg viewBox="0 0 580 220" className="w-full h-full z-10 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)] overflow-visible">
                                     {/* Camera → splits to two models */}
-                                    <path d="M 75,80 L 95,80 L 95,50 L 120,50" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
-                                    <path d="M 75,80 L 95,80 L 95,120 L 120,120" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 75,50 L 95,50 L 95,20 L 120,20" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 75,50 L 95,50 L 95,90 L 120,90" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    {/* Audio → Qwen2 */}
+                                    <path d="M 75,170 L 120,170" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+
                                     {/* Models → merge into DB */}
-                                    <path d="M 230,50 L 255,50 L 255,80 L 280,80" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
-                                    <path d="M 230,120 L 255,120 L 255,80 L 280,80" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
-                                    {/* DB → CHAT_UI */}
-                                    <path d="M 370,80 L 410,80" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
-                                    {/* DB → up → SUPERMEMORY */}
-                                    <path d="M 325,60 L 325,30 L 410,30" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 230,20 L 255,20 L 255,80 L 280,80" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 230,90 L 280,90" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 230,170 L 255,170 L 255,100 L 280,100" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+
+                                    {/* DB → CHAT_UI & SUPERMEMORY */}
+                                    <path d="M 370,90 L 390,90 L 390,120 L 410,120" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 370,90 L 390,90 L 390,40 L 410,40" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+
                                     {/* SUPERMEMORY → CHAT_UI (vertical) */}
-                                    <path d="M 465,50 L 465,60" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
+                                    <path d="M 465,60 L 465,100" stroke="var(--color-data)" strokeWidth="2" strokeDasharray="4 4" className="animate-[dash_2s_linear_infinite]" fill="none" />
 
                                     {/* CAMERA */}
-                                    <rect x="0" y="60" width="75" height="40" fill="rgba(255,255,255,0.05)" stroke="white" strokeWidth="2" />
-                                    <text x="8" y="84" fill="white" fontSize="11" fontFamily="monospace" fontWeight="bold">CAMERA</text>
+                                    <rect x="0" y="30" width="75" height="40" fill="rgba(255,255,255,0.05)" stroke="white" strokeWidth="2" />
+                                    <text x="8" y="54" fill="white" fontSize="11" fontFamily="monospace" fontWeight="bold">CAMERA</text>
+
+                                    {/* AUDIO */}
+                                    <rect x="0" y="150" width="75" height="40" fill="rgba(255,255,255,0.05)" stroke="white" strokeWidth="2" />
+                                    <text x="12" y="174" fill="white" fontSize="11" fontFamily="monospace" fontWeight="bold">AUDIO</text>
 
                                     {/* YOLOv11 */}
-                                    <rect x="120" y="30" width="110" height="40" fill="rgba(255,51,0,0.1)" stroke="var(--color-alert)" strokeWidth="2" />
-                                    <text x="130" y="55" fill="var(--color-alert)" fontSize="11" fontFamily="monospace" fontWeight="bold">YOLOv11</text>
+                                    <rect x="120" y="0" width="110" height="40" fill="rgba(255,51,0,0.1)" stroke="var(--color-alert)" strokeWidth="2" />
+                                    <text x="130" y="24" fill="var(--color-alert)" fontSize="11" fontFamily="monospace" fontWeight="bold">YOLOv11</text>
 
                                     {/* BEHAVIOR_AI */}
-                                    <rect x="120" y="100" width="110" height="40" fill="rgba(255,51,0,0.1)" stroke="var(--color-alert)" strokeWidth="2" />
-                                    <text x="127" y="125" fill="var(--color-alert)" fontSize="10" fontFamily="monospace" fontWeight="bold">BEHAVIOR_AI</text>
+                                    <rect x="120" y="70" width="110" height="40" fill="rgba(255,51,0,0.1)" stroke="var(--color-alert)" strokeWidth="2" />
+                                    <text x="127" y="94" fill="var(--color-alert)" fontSize="10" fontFamily="monospace" fontWeight="bold">BEHAVIOR_AI</text>
+
+                                    {/* QWEN2 */}
+                                    <rect x="120" y="150" width="110" height="40" fill="rgba(255,51,0,0.1)" stroke="var(--color-alert)" strokeWidth="2" />
+                                    <text x="142" y="174" fill="var(--color-alert)" fontSize="11" fontFamily="monospace" fontWeight="bold">QWEN2</text>
 
                                     {/* FBASE_DB */}
-                                    <rect x="280" y="60" width="90" height="40" fill="rgba(255,255,255,0.05)" stroke="white" strokeWidth="2" />
-                                    <text x="288" y="84" fill="white" fontSize="10" fontFamily="monospace" fontWeight="bold">FBASE_DB</text>
+                                    <rect x="280" y="70" width="90" height="40" fill="rgba(255,255,255,0.05)" stroke="white" strokeWidth="2" />
+                                    <text x="288" y="94" fill="white" fontSize="10" fontFamily="monospace" fontWeight="bold">FBASE_DB</text>
 
                                     {/* SUPERMEMORY */}
-                                    <rect x="410" y="10" width="110" height="40" fill="rgba(0,255,102,0.05)" stroke="var(--color-data)" strokeWidth="2" />
-                                    <text x="415" y="35" fill="var(--color-data)" fontSize="10" fontFamily="monospace" fontWeight="bold">SUPERMEMORY</text>
+                                    <rect x="410" y="20" width="110" height="40" fill="rgba(0,255,102,0.05)" stroke="var(--color-data)" strokeWidth="2" />
+                                    <text x="415" y="44" fill="var(--color-data)" fontSize="10" fontFamily="monospace" fontWeight="bold">SUPERMEMORY</text>
 
                                     {/* CHAT_UI */}
-                                    <rect x="410" y="60" width="110" height="40" fill="rgba(0,255,102,0.05)" stroke="var(--color-data)" strokeWidth="2" />
-                                    <text x="427" y="84" fill="var(--color-data)" fontSize="11" fontFamily="monospace" fontWeight="bold">CHAT_UI</text>
+                                    <rect x="410" y="100" width="110" height="40" fill="rgba(0,255,102,0.05)" stroke="var(--color-data)" strokeWidth="2" />
+                                    <text x="427" y="124" fill="var(--color-data)" fontSize="11" fontFamily="monospace" fontWeight="bold">CHAT_UI</text>
                                 </svg>
                                 <style>{`@keyframes dash { to { stroke-dashoffset: -16; } }`}</style>
                             </div>
@@ -752,7 +765,7 @@ export default function LandingPage() {
                                     </div>
                                     <div>
                                         <h3 className="text-xl md:text-2xl font-black uppercase tracking-tighter mb-3 text-[var(--color-data)] group-hover:text-black">Serverless GPU Inference</h3>
-                                        <p className="font-mono text-xs leading-relaxed text-[var(--color-silica)] group-hover:text-black/80 max-w-sm">YOLO + action-recognition on Modal's serverless GPUs. 30+ FPS real-time. Zero local bottlenecks.</p>
+                                        <p className="font-mono text-xs leading-relaxed text-[var(--color-silica)] group-hover:text-black/80 max-w-sm">YOLO + action-recognition on Modal's serverless GPUs. 15+ FPS real-time. Zero local bottlenecks.</p>
                                     </div>
                                 </div>
                             </div>
