@@ -227,7 +227,18 @@ def proxy_fast_vision_sequence(
             timeout=15,
         )
         if resp.status_code == 200:
-            return _parse_fast_vision_response(resp.json())
+            result = _parse_fast_vision_response(resp.json())
+            threat_type = result.get("threat_type", "none")
+            dets = result.get("detections") or []
+            threat_dets = [d for d in dets if d.get("is_threat")]
+            logger.info(
+                f"[PROXY] stream={stream_id} threat={threat_type} "
+                f"dets={len(dets)} threats={len(threat_dets)} "
+                f"weapon_conf={result.get('weapon_confidence', 0):.2f} "
+                f"violence_conf={result.get('violence_confidence', 0):.2f} "
+                f"fall_conf={result.get('fall_confidence', 0):.2f}"
+            )
+            return result
         logger.error(f"FastVision sequence returned {resp.status_code}: {resp.text[:200]}")
         return empty
     except Exception as e:

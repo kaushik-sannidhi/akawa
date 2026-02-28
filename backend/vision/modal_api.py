@@ -657,7 +657,7 @@ class FastVisionAPI:
                     fall_confidence=max_fall_conf,
                     threat_type=threat_type,
                     detections=all_detections,
-                    raw_brawl_conf=raw_brawl_conf,
+                    raw_brawl_confidence=raw_brawl_conf,
                 )
 
             except Exception as e:
@@ -805,6 +805,9 @@ class FastVisionAPI:
                     threat_type = "fall"
                 elif violence_detected:
                     threat_type = "violence"
+                    # Upgrade person markers to violent_person for UI colouring
+                    for d in all_person_dets:
+                        d.detection_type = "violent_person"
                 else:
                     threat_type = "none"
 
@@ -825,7 +828,7 @@ class FastVisionAPI:
                     fall_confidence=max_fall_conf,
                     threat_type=threat_type,
                     detections=all_detections,
-                    raw_brawl_conf=max_brawl_conf,
+                    raw_brawl_confidence=max_brawl_conf,
                 )
 
             except Exception as e:
