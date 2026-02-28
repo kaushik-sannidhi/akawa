@@ -119,18 +119,32 @@ export default function UploadAnalysisPage() {
     }, [videoData?.video_id]);
 
     const handleNewAlerts = (detections: any[], timestamp: number) => {
-        // Filter for weapon classes above the threshold
+        // Filter for weapon/threat classes above the threshold
         const newThreats = detections.filter(
-            (d) => WEAPON_CLASSES.includes(d.class_name) && d.confidence >= localThreshold
+            (d) =>
+                (d.is_threat ||
+                    WEAPON_CLASSES.includes(d.class_name) ||
+                    ["weapon", "fall", "violent_person"].includes(d.detection_type)) &&
+                d.confidence >= localThreshold
         );
 
         if (newThreats.length > 0) {
             setAlerts((prev) => {
                 const updated = [...prev];
                 newThreats.forEach((event) => {
+                    // Map detection types to standardized classes for the UI
+                    const isWeaponType = ["gun", "knife", "weapon"].includes(event.class_name) || event.detection_type === "weapon";
+                    const isViolence = event.class_name === "violence" || event.detection_type === "violent_person";
+                    const isFall = event.class_name === "fall" || event.detection_type === "fall";
+
+                    let mappedClass = event.class_name;
+                    if (isWeaponType && !["gun", "knife"].includes(event.class_name)) mappedClass = "gun";
+                    else if (isViolence) mappedClass = "violence";
+                    else if (isFall) mappedClass = "fall";
+
                     const existingIdx = updated.findIndex(
                         (a) =>
-                            a.class_name === event.class_name &&
+                            a.class_name === mappedClass &&
                             a.endTimestamp !== undefined &&
                             timestamp - a.endTimestamp <= 3.0
                     );
@@ -144,7 +158,7 @@ export default function UploadAnalysisPage() {
                     } else {
                         updated.unshift({
                             id: Date.now() + Math.random(),
-                            class_name: event.class_name,
+                            class_name: mappedClass,
                             confidence: event.confidence,
                             startTimestamp: timestamp,
                             endTimestamp: timestamp,
