@@ -9,6 +9,7 @@ import { useTelemetry } from "@/context/TelemetryContext";
 import { getBaseUrl } from "@/lib/config";
 import { useAuth } from "@/context/AuthContext";
 import { analyzeVideoWithVLM } from "@/lib/vlmApi";
+import { saveSecurityEventToMemory } from "@/lib/supermemoryClient";
 
 export default function LiveStreamPage() {
     const { logSysEvent } = useTelemetry();
@@ -146,7 +147,14 @@ export default function LiveStreamPage() {
             ));
 
             const response = await analyzeVideoWithVLM({ videoBlob });
-
+            if (response.text) {
+                saveSecurityEventToMemory({
+                    alertType: 'threat',
+                    vlmDescription: response.text,
+                    timestamp: new Date().toISOString(),
+                    cameraId: videoId
+                });
+            }
             // Update the alert with the final text
             setAlerts(prev => {
                 const updated = prev.map(a =>

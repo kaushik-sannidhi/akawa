@@ -9,11 +9,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.34",
+    "@ai-sdk/react": "^3.0.107",
     "@cloudflare/realtimekit": "^1.2.4",
     "@cloudflare/realtimekit-react": "^1.2.4",
     "@cloudflare/realtimekit-react-ui": "^1.1.0",
     "@google/generative-ai": "^0.24.1",
+    "@supermemory/tools": "^1.4.0",
     "@types/nodemailer": "^7.0.11",
+    "ai": "^6.0.105",
     "clsx": "^2.1.1",
     "firebase": "^12.9.0",
     "framer-motion": "^12.34.3",

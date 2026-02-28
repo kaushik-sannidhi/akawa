@@ -9,6 +9,7 @@ import { signOut } from "firebase/auth";
 import { TelemetryProvider } from "@/context/TelemetryContext";
 import { SettingsProvider } from "@/context/SettingsContext";
 import ChatBot from "@/components/ChatBot";
+import SecurityCopilotChat from "@/components/SecurityCopilotChat";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const { user, loading } = useAuth();
@@ -209,6 +210,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
             {/* Global AI Assistant */}
             <ChatBot />
+
+            {/* Security Copilot - Specific tool for Supermemory/CCTV logs */}
+            <SecurityCopilotChat />
         </div>
     );
 }
