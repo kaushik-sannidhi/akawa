@@ -14,7 +14,7 @@ interface StreamDialogProps {
 export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamDialogProps) {
     const { user } = useAuth();
     const [name, setName] = useState("");
-    const [streamType, setStreamType] = useState<"rtsp" | "server_cam" | "client_cam">("server_cam");
+    const [streamType, setStreamType] = useState<"rtsp" | "server_cam" | "client_cam">("client_cam");
     const [source, setSource] = useState("0");
     const [loading, setLoading] = useState(false);
     const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
@@ -124,6 +124,13 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                             <button
                                 type="button"
+                                onClick={() => setStreamType("client_cam")}
+                                className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "client_cam" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}
+                            >
+                                <Camera className="w-5 h-5" /> LOCAL_DEVICE
+                            </button>
+                            <button
+                                type="button"
                                 onClick={() => setStreamType("server_cam")}
                                 className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "server_cam" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}
                             >
@@ -135,13 +142,6 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                                 className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "rtsp" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}
                             >
                                 <Globe className="w-5 h-5" /> RTSP_IP_CAM
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => setStreamType("client_cam")}
-                                className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "client_cam" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}
-                            >
-                                <Camera className="w-5 h-5" /> LOCAL_DEVICE
                             </button>
                         </div>
                     </div>

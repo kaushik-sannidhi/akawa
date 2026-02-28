@@ -234,6 +234,16 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
             <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
                 {!videoLoaded && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0d0d0d] z-30">
+                        <div className="flex gap-1 mb-4">
+                            {[0, 1, 2].map((i) => (
+                                <motion.div
+                                    key={i}
+                                    animate={{ opacity: [0.3, 1, 0.3] }}
+                                    transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
+                                    className="w-8 h-8 bg-[var(--color-iron)]"
+                                />
+                            ))}
+                        </div>
                         <div className="text-[10px] font-bold tracking-[0.2em] text-[var(--color-data)]">
                             [{netState.replace(/_/g, " ").toUpperCase()}]
                         </div>

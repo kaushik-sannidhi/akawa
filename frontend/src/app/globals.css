@@ -140,6 +140,46 @@ body::after {
   }
 }
 
+@keyframes slide-in-bottom {
+  0% {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes float-subtle {
+  0% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-5px);
+  }
+
+  100% {
+    transform: translateY(0px);
+  }
+}
+
+@keyframes float-subtle-large {
+  0% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-15px);
+  }
+
+  100% {
+    transform: translateY(0px);
+  }
+}
+
 @layer components {
 
   /* Brutalist structural components */
@@ -205,15 +245,48 @@ body::after {
     will-change: transform;
   }
 
-  /* Custom scrollbar for brutalist theme */
   .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
   }
+
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
+
   .custom-scrollbar::-webkit-scrollbar-thumb {
     background-color: var(--color-iron);
+  }
+
+  .animate-slide-in-bottom {
+    animation: slide-in-bottom 0.8s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+  }
+
+  .animate-float-subtle {
+    animation: float-subtle 4s ease-in-out infinite;
+  }
+
+  .animate-float-subtle-large {
+    animation: float-subtle-large 8s ease-in-out infinite;
+  }
+
+  .stagger-1 {
+    animation-delay: 0.1s;
+    opacity: 0;
+  }
+
+  .stagger-2 {
+    animation-delay: 0.2s;
+    opacity: 0;
+  }
+
+  .stagger-3 {
+    animation-delay: 0.3s;
+    opacity: 0;
+  }
+
+  .stagger-4 {
+    animation-delay: 0.4s;
+    opacity: 0;
   }
 }
 

@@ -369,22 +369,23 @@ export default function LandingPage() {
                     <div className="md:col-span-3 p-8 md:p-12 lg:p-16 border-b-[2px] md:border-b-0 md:border-r-[2px] border-[var(--color-iron)] relative bg-[var(--color-dim)] flex flex-col justify-center">
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.5)_1px,transparent_1px)] bg-[size:32px_32px] opacity-20 pointer-events-none" />
 
-                        <div className="relative z-10 mix-blend-difference">
-                            <h1 className="text-[3.5rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-8 text-[var(--color-data)] tracking-tighter whitespace-nowrap overflow-visible">
+                        <div className="relative z-10 mix-blend-difference animate-slide-in-bottom">
+                            <h1 className="text-[3.5rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-8 text-[var(--color-data)] tracking-tighter whitespace-nowrap overflow-visible animate-float-subtle-large">
                                 <ScrambleText text="ABSOLUTE" delay={500} /><br />
                                 <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="VIGILANCE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
                             </h1>
 
-                            <div className="max-w-2xl font-mono text-sm leading-relaxed text-[var(--color-silica)] mb-12 border-l-[4px] border-[var(--color-alert)] pl-4 bg-[var(--color-void)] p-4 border-y border-r border-[#333]">
+                            <div className="max-w-2xl font-mono text-sm leading-relaxed text-[var(--color-silica)] mb-12 border-l-[4px] border-[var(--color-alert)] pl-4 bg-[var(--color-void)] p-4 border-y border-r border-[#333] animate-slide-in-bottom stagger-1 animate-float-subtle">
                                 <p className="mb-4 text-[var(--color-alert)] font-bold">// TWO-STAGE ARCHITECTURE:</p>
                                 <p>
                                     TRANSFORM PASSIVE CAMPUS HARDWARE INTO AN UNBLINKING PROACTIVE DEFENSE GRID. <span className="text-white font-bold bg-[#333] px-1">YOLOv11</span> FOR RAPID WEAPON CLASSIFICATION. <span className="text-white font-bold bg-[#333] px-1">LMST MODEL</span> FOR KINEMATIC STANCE TRACKING.
                                 </p>
                             </div>
 
-                            <div className="flex flex-col sm:flex-row gap-0">
-                                <Link href="/signup" className="btn-alert text-xl md:text-2xl py-6 px-8 flex-1 text-center font-bold">
-                                    [ DEPLOY_INSTANCE ]
+                            <div className="flex flex-col sm:flex-row gap-0 animate-slide-in-bottom stagger-2">
+                                <Link href="/signup" className="btn-alert text-xl md:text-2xl py-6 px-8 flex-1 text-center font-bold relative overflow-hidden group">
+                                    <span className="relative z-10">[ DEPLOY_INSTANCE ]</span>
+                                    <div className="absolute inset-0 bg-white translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-in-out z-0"></div>
                                 </Link>
                             </div>
                         </div>
@@ -511,16 +512,16 @@ export default function LandingPage() {
                             {problemInView ? <ScrambleText text="SYSTEMIC FAILURE" delay={800} durationMultiplier={3} /> : " "}
                         </h2>
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-16">
-                            <div className="border-l-4 border-black pl-6 bg-[var(--color-alert)]/90 p-4 hover:bg-black hover:text-[var(--color-alert)] transition-none cursor-crosshair group">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-16 mt-8">
+                            <div className="border-l-4 border-black pl-6 bg-[var(--color-alert)]/90 p-4 hover:bg-black hover:text-[var(--color-alert)] transition-none cursor-crosshair group animate-float-subtle">
                                 <h3 className="text-5xl md:text-7xl font-black mb-2 group-hover:animate-none animate-pulse">99%</h3>
                                 <p className="font-mono font-bold text-sm md:text-base leading-tight">OF TRADITIONAL CCTV FOOTAGE IS NEVER WATCHED LIVE. CAMERAS ONLY RECORD HISTORY.</p>
                             </div>
-                            <div className="border-l-4 border-black pl-6 bg-[var(--color-alert)]/90 p-4 hover:bg-black hover:text-[var(--color-alert)] transition-none cursor-crosshair">
+                            <div className="border-l-4 border-black pl-6 bg-[var(--color-alert)]/90 p-4 hover:bg-black hover:text-[var(--color-alert)] transition-none cursor-crosshair animate-float-subtle stagger-1">
                                 <h3 className="text-5xl md:text-7xl font-black mb-2">ZERO</h3>
                                 <p className="font-mono font-bold text-sm md:text-base leading-tight">PREEMPTIVE ACTION TAKEN BEFORE THE THRESHOLD. REACTIVE SURVEILLANCE ONLY DOCUMENTS THE AFTERMATH.</p>
                             </div>
-                            <div className="border-l-4 border-black pl-6 bg-[var(--color-alert)]/90 p-4 hover:bg-black hover:text-[var(--color-alert)] transition-none cursor-crosshair">
+                            <div className="border-l-4 border-black pl-6 bg-[var(--color-alert)]/90 p-4 hover:bg-black hover:text-[var(--color-alert)] transition-none cursor-crosshair animate-float-subtle stagger-2">
                                 <h3 className="text-5xl md:text-7xl font-black mb-2">7 MIN</h3>
                                 <p className="font-mono font-bold text-sm md:text-base leading-tight">AVERAGE RESPONSE DELAY DURING ACTIVE CRISES DUE TO HUMAN-IN-THE-LOOP BOTTLENECKS.</p>
                             </div>

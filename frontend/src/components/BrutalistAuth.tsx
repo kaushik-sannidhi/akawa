@@ -147,7 +147,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                 filter: { duration: 0.2 },
                                 clipPath: { duration: 0.3, ease: "anticipate" }
                             }}
-                            className="w-full bg-black border-[2px] border-[var(--color-iron)] p-8 relative overflow-hidden"
+                            className="w-full bg-black border-[2px] border-[var(--color-iron)] p-8 relative overflow-hidden animate-slide-in-bottom"
                             drag="x"
                             dragConstraints={{ left: 0, right: 0 }}
                             dragElastic={1}

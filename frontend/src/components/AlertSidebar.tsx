@@ -37,7 +37,7 @@ export default function AlertSidebar({
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
                 <div className="space-y-4">
                     {alerts.length === 0 ? (
-                        <div className="text-[var(--color-silica)] text-[10px] text-center mt-10 opacity-50 flex flex-col items-center">
+                        <div className="text-[var(--color-silica)] text-[10px] text-center mt-10 opacity-50 flex flex-col items-center animate-float-subtle">
                             <span>AWAITING_TELEMETRY...</span>
                             <span>{">"} _</span>
                         </div>
@@ -66,7 +66,7 @@ export default function AlertSidebar({
                                             ? onSeek(alert.startTimestamp)
                                             : undefined
                                     }
-                                    className={`p-3 border-[2px] ${borderColor} ${bgColor} hover:bg-[var(--color-void)] transition-none cursor-crosshair relative group flex flex-col gap-2`}
+                                    className={`p-3 border-[2px] ${borderColor} ${bgColor} hover:bg-[var(--color-void)] transition-none cursor-crosshair relative group flex flex-col gap-2 animate-slide-in-bottom`}
                                 >
                                     {onClear && (
                                         <button
