@@ -1,7 +1,7 @@
 import os
 import modal
 
-app = modal.App("akawa-weapon-detector")
+app = modal.App("akawa-ai")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -21,7 +21,7 @@ image = (
 WEAPON_CLASSES = {"rifle", "handgun", "knife", "weapon"}
 
 @app.cls(gpu="T4", image=image)
-class WeaponDetectorModel:
+class WeaponAPI:
     @modal.enter()
     def setup(self):
         from ultralytics import YOLO

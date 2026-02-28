@@ -5,7 +5,7 @@ import base64
 import threading
 
 WEAPON_CLASSES = {"rifle", "handgun", "knife", "weapon"}
-MODAL_PREDICT_URL = "https://kaushik-sannidhi--akawa-weapon-detector-weapondetectormodel-predict.modal.run"
+MODAL_PREDICT_URL = "https://kaushik-sannidhi--akawa-ai-weaponapi-predict.modal.run"
 
 class WeaponDetector:
     def __init__(self, model_path=None):

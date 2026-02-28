@@ -63,11 +63,8 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
     This keeps stream nodes visible across devices and backend restarts.
     """
     try:
+        # Ignore uid_filter to make streams globally visible to everyone
         target_url = f"{FIREBASE_RTDB_BASE}/streams.json"
-        if uid_filter:
-            target_url = (
-                f'{FIREBASE_RTDB_BASE}/streams.json?orderBy="$key"&equalTo="{uid_filter}"'
-            )
 
         resp = requests.get(target_url, timeout=6)
         if resp.status_code != 200:
@@ -435,13 +432,11 @@ class StreamCreateRequest(BaseModel):
 
 @app.get("/api/streams")
 async def list_streams(uid: str = "anonymous"):
-    """Return all active streams for this user."""
-    if uid and uid != "anonymous":
-        _restore_streams_from_firebase(uid)
+    """Return all active streams globally."""
+    _restore_streams_from_firebase()
 
     all_streams = stream_manager.list_streams()
-    user_streams = [s for s in all_streams if s.get("uid") == uid]
-    return {"streams": user_streams}
+    return {"streams": all_streams}
 
 
 @app.post("/api/streams")
@@ -479,11 +474,14 @@ async def create_stream(req: StreamCreateRequest):
 @app.delete("/api/streams/{stream_id}")
 async def delete_stream(stream_id: str, uid: str = "anonymous"):
     print(f"\n[API] DELETE /api/streams/{stream_id} - Received request to delete stream")
+    stream = stream_manager.get_stream(stream_id)
+    stream_uid = stream.uid if stream else uid
+
     await stream_manager.remove_stream(stream_id)
     
     # Remove from Firebase
     try:
-        requests.delete(f"{FIREBASE_RTDB_BASE}/streams/{uid}/{stream_id}.json")
+        requests.delete(f"{FIREBASE_RTDB_BASE}/streams/{stream_uid}/{stream_id}.json")
     except Exception as e:
         print(f"[API] DELETE /api/streams/{stream_id} - Failed to remove stream from Firebase: {e}")
 
@@ -523,6 +521,8 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     try:
         while stream._running:
             message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
 
             if "bytes" in message and message["bytes"]:
                 jpeg_bytes = message["bytes"]
@@ -566,7 +566,9 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     try:
         while stream._running and stream_manager.get_stream(stream_id):
             # Use generic receive() to handle text pings or disconnect
-            await websocket.receive()
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                break
     except WebSocketDisconnect:
         pass
     except Exception:
