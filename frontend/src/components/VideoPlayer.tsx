@@ -97,6 +97,9 @@ export default function VideoPlayer({
                                 );
                                 if (weapons.length > 0) {
                                     onAlertRef.current(weapons, payload.timestamp);
+
+                                    // Trigger clip generation
+                                    captureClipForAlert(payload.timestamp);
                                 }
 
                                 const pct = Math.round(payload.progress * 100);
@@ -120,6 +123,97 @@ export default function VideoPlayer({
         runAnalysis();
         return () => abortController.abort();
     }, [videoId]);
+
+    // Track recently captured clip timestamps to prevent overlapping captures
+    const lastClipTimeRef = useRef<number>(-10); // initialized far past
+
+    // Helper: Captures a short WebM clip of the video at a specific time
+    const captureClipForAlert = async (timestamp: number) => {
+        // Debounce to prevent multiple clips for the same event (e.g., if multiple frames trigger alerts in rapid succession)
+        if (Math.abs(timestamp - lastClipTimeRef.current) < 5) return;
+        lastClipTimeRef.current = timestamp;
+
+        // Since we are running in the "pre-analysis" phase, the video might not be playing at `timestamp` right now.
+        // We will create a hidden offscreen video element just for recording this clip
+        try {
+            const hiddenVideo = document.createElement("video");
+            hiddenVideo.crossOrigin = "anonymous";
+            hiddenVideo.src = `${getBaseUrl()}${videoUrl}`;
+            hiddenVideo.muted = true;
+            hiddenVideo.playsInline = true;
+
+            // wait for metadata to know dimensions
+            await new Promise((resolve) => {
+                hiddenVideo.onloadedmetadata = resolve;
+            });
+
+            // we want to capture from timestamp - 2 to timestamp + 3
+            const startTime = Math.max(0, timestamp - 2);
+            hiddenVideo.currentTime = startTime;
+
+            await new Promise((resolve, reject) => {
+                hiddenVideo.oncanplay = resolve;
+                hiddenVideo.onerror = reject;
+            });
+
+            const renderCanvas = document.createElement("canvas");
+            renderCanvas.width = hiddenVideo.videoWidth;
+            renderCanvas.height = hiddenVideo.videoHeight;
+            const ctx = renderCanvas.getContext("2d");
+
+            // captureStream 15fps
+            const captureStream = renderCanvas.captureStream(15);
+            const mediaRecorder = new MediaRecorder(captureStream, { mimeType: "video/webm" });
+            const chunks: Blob[] = [];
+
+            mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+
+            const recordPromise = new Promise<Blob>((resolve) => {
+                mediaRecorder.onstop = () => {
+                    resolve(new Blob(chunks, { type: "video/webm" }));
+                };
+            });
+
+            mediaRecorder.start();
+            hiddenVideo.play();
+
+            // Render loop for the clip
+            const duration = 5000; // record for 5 seconds
+            const recStart = Date.now();
+
+            const drawLoop = () => {
+                if (Date.now() - recStart > duration) {
+                    hiddenVideo.pause();
+                    mediaRecorder.stop();
+                    return;
+                }
+                if (ctx && hiddenVideo.readyState >= 2) {
+                    ctx.drawImage(hiddenVideo, 0, 0, renderCanvas.width, renderCanvas.height);
+                }
+                requestAnimationFrame(drawLoop);
+            };
+            drawLoop();
+
+            const clipBlob = await recordPromise;
+
+            // Dispatch a custom event with the generated clip
+            const event = new CustomEvent('awca_clip_generated', {
+                detail: {
+                    videoId,
+                    timestamp,
+                    videoBlob: clipBlob
+                }
+            });
+            window.dispatchEvent(event);
+
+            // Cleanup hidden elements
+            hiddenVideo.src = "";
+            hiddenVideo.remove();
+            renderCanvas.remove();
+        } catch (err) {
+            console.error("Failed to generate clip for alert:", err);
+        }
+    };
 
     // === PLAYBACK: render cached detections in sync with video ===
     useEffect(() => {

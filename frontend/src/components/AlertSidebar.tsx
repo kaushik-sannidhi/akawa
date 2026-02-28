@@ -74,7 +74,7 @@ export default function AlertSidebar({
                                                 e.stopPropagation();
                                                 onClear(alert.id);
                                             }}
-                                            className="absolute top-2 right-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-[var(--color-silica)] hover:text-white transition-none bg-black border border-[var(--color-iron)] p-1"
+                                            className="absolute top-2 right-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-[var(--color-silica)] hover:text-white transition-none bg-black border border-[var(--color-iron)] p-1 z-10"
                                         >
                                             <X className="w-3 h-3" />
                                         </button>
@@ -100,6 +100,25 @@ export default function AlertSidebar({
                                         )}
                                         <span className="text-[8px] opacity-50">NODE_01</span>
                                     </div>
+
+                                    {/* VLM Analysis Section */}
+                                    {alert.vlmAnalysis && (
+                                        <div className="mt-2 border-t border-[var(--color-iron)] pt-2 relative">
+                                            {alert.vlmAnalysis === "ANALYZING..." ? (
+                                                <div className="flex items-center gap-2 text-[10px] text-[var(--color-data)]">
+                                                    <div className="w-1.5 h-1.5 bg-[var(--color-data)] animate-ping rounded-full" />
+                                                    <span>VLM_ANALYSIS_IN_PROGRESS...</span>
+                                                </div>
+                                            ) : (
+                                                <div className="bg-black/50 border border-[var(--color-iron)] p-2">
+                                                    <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 border-b border-[var(--color-iron)] pb-1">[ DEEP_VISION_LOG ]</span>
+                                                    <p className="text-[9px] text-[var(--color-data)] leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
+                                                        {alert.vlmAnalysis}
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })
