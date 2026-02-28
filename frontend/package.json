@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@vercel/analytics": "^1.6.1",
     "clsx": "^2.1.1",
     "firebase": "^12.9.0",
     "framer-motion": "^12.34.3",
