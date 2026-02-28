@@ -18,7 +18,7 @@ image = (
     .add_local_file(os.path.join(os.path.dirname(__file__), "best.pt"), remote_path="/model/best.pt")
 )
 
-WEAPON_CLASSES = {"rifle", "handgun", "knife", "weapon"}
+WEAPON_CLASSES = {"gun", "knife"}
 
 @app.cls(gpu="T4", image=image)
 class WeaponAPI:

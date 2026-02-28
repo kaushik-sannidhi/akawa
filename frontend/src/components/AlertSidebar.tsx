@@ -2,7 +2,7 @@
 
 import { X } from "lucide-react";
 
-const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"];
+const WEAPON_CLASSES = ["gun", "knife"];
 
 export default function AlertSidebar({
     alerts,

@@ -310,13 +310,14 @@ class FastVisionAPI:
                 weapon_confidences = []
                 detections = []
                 
-                # Default weapons
-                WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"]
+                # Default weapons (Simplified per user request)
+                WEAPON_CLASSES = ["gun", "knife"]
                 
                 if hasattr(self.weapon_model, "names"):
                     class_names = self.weapon_model.names
                 else:
-                    class_names = getattr(self.weapon_model.model, "names", {0: "weapon"})
+                    # Explicit mapping: 0=person, 1=gun, 2=knife
+                    class_names = getattr(self.weapon_model.model, "names", {0: "person", 1: "gun", 2: "knife"})
                 
                 for r in results:
                     boxes = r.boxes

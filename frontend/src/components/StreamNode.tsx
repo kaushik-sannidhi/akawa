@@ -66,7 +66,7 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, o
             const y1 = (b.y1 ?? b[1]) * dh;
             const x2 = (b.x2 ?? b[2]) * dw;
             const y2 = (b.y2 ?? b[3]) * dh;
-            const isWeapon = ["rifle", "handgun", "knife", "weapon", "violence"].includes(det.class_name);
+            const isWeapon = ["gun", "knife", "violence"].includes(det.class_name);
             const color = isWeapon ? "#FF3300" : "#FFFFFF";
             const corner = Math.max(6, 10 * scale);
 

@@ -124,7 +124,7 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
         print(f"[RESTORE] Failed syncing streams from Firebase: {exc}")
 
 # Hardcoded classes for generic alerts until the frontend is updated
-WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"]
+WEAPON_CLASSES = ["gun", "knife"]
 
 # Modal API Endpoints
 FAST_VISION_URL = "https://apat7--akawa-vlm-api-fastvisionapi-analyze.modal.run"
