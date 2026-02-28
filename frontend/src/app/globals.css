@@ -204,6 +204,17 @@ body::after {
     animation: data-scroll 8s linear infinite;
     will-change: transform;
   }
+
+  /* Custom scrollbar for brutalist theme */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: var(--color-iron);
+  }
 }
 
 /* Force override of any lingering Tailwind rounded utilities */

@@ -588,9 +588,9 @@ export default function StreamNode({
                         ref={videoRef}
                         className="absolute inset-0 h-full w-full object-cover z-10"
                         style={{ transform: "translateZ(0)" }}
-                        autoPlay
+                        autoPlay={true}
+                        playsInline={true}
                         muted={isOwner ? true : isMuted}
-                        playsInline
                     />
                 )}
 

@@ -16,12 +16,12 @@ export default function DashboardOverview() {
           <span className="text-2xl sm:text-3xl font-black text-[var(--color-data)] break-all">{telemetry.scanned.toLocaleString()}</span>
         </div>
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
-          <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ ACTIVE_ANOMALIES ]</span>
+          <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ ANOMALIES_DETECTED ]</span>
           <span className="text-2xl sm:text-3xl font-black text-[var(--color-alert)]">{telemetry.anomalies}</span>
         </div>
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
           <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ ONLINE_SENSORS ]</span>
-          <span className="text-2xl sm:text-3xl font-black text-[var(--color-data)]">{telemetry.activeNodes} / 24</span>
+          <span className="text-2xl sm:text-3xl font-black text-[var(--color-data)]">{telemetry.activeNodes}</span>
         </div>
         <div className="border-[2px] border-[var(--color-iron)] bg-black p-4 flex flex-col uppercase">
           <span className="text-[10px] text-[var(--color-silica)] font-bold mb-2">[ AVG_NODE_LATENCY ]</span>
@@ -66,7 +66,7 @@ export default function DashboardOverview() {
           <span className="animate-pulse">_</span>
         </div>
 
-        <div className="flex-1 overflow-hidden relative flex flex-col gap-2 opacity-80">
+        <div className="flex-1 overflow-y-auto relative flex flex-col gap-2 opacity-80 custom-scrollbar pr-2">
           {telemetry.logs.map((log, i) => (
             <div key={i} className={log.includes("[WARN]") || log.includes("ANOMALY") ? "text-[var(--color-alert)]" : "text-[var(--color-data)]"}>
               {log.startsWith("[") ? (
@@ -77,7 +77,7 @@ export default function DashboardOverview() {
               ) : log}
             </div>
           ))}
-          <div className="absolute bottom-0 w-full h-12 bg-gradient-to-t from-black to-transparent pointer-events-none" />
+          <div className="sticky bottom-0 w-full h-12 bg-gradient-to-t from-black to-transparent pointer-events-none" />
         </div>
       </div>
 

@@ -60,6 +60,8 @@ class StreamManager:
         logger.info(f"====== NEW STREAM CREATED ======")
         logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai}")
 
+        self._update_telemetry_nodes(uid)
+
         if stream.type in ["rtsp", "server_cam"]:
             stream._running = True
             stream.status = "active"
@@ -104,6 +106,12 @@ class StreamManager:
 
         self.streams.pop(stream_id, None)
         logger.info(f"====== STREAM REMOVED: {stream_id} ======")
+        self._update_telemetry_nodes(stream.uid)
+
+    def _update_telemetry_nodes(self, uid: str):
+        from app.telemetry import telemetry_service
+        count = sum(1 for s in self.streams.values() if s.uid == uid)
+        telemetry_service.update_nodes(count, uid)
 
     def get_stream(self, stream_id: str) -> Optional[Stream]:
         return self.streams.get(stream_id)
@@ -172,10 +180,14 @@ class StreamManager:
                     continue
                 last_frame_id = frame_id
 
+                t0 = time.time()
                 detections = await asyncio.to_thread(
                     detector.process_frame, frame)
+                latency_ms = int((time.time() - t0) * 1000)
+
                 stream.latest_detections = detections
                 telemetry_service.log_frames(1, stream.uid)
+                telemetry_service.log_latency(latency_ms, stream.uid)
 
                 if any(d.get("is_weapon") for d in detections):
                     telemetry_service.log_anomaly(

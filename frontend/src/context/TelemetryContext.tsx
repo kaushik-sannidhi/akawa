@@ -27,7 +27,7 @@ export const TelemetryProvider = ({ children }: { children: ReactNode }) => {
         anomalies: 0,
         activeNodes: 0,
         latency: 4,
-        logs: [`[${new Date().toLocaleTimeString()}] AWAITING AUTHENTICATION...`]
+        logs: [`[${new Date().toISOString().substring(0, 10)} ${new Date().toLocaleTimeString()}] AWAITING AUTHENTICATION...`]
     });
 
     const [dbInstance, setDbInstance] = useState<any>(null);
@@ -37,7 +37,7 @@ export const TelemetryProvider = ({ children }: { children: ReactNode }) => {
         const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
             if (user) {
                 setUid(user.uid);
-                setTelemetry(prev => ({ ...prev, logs: [`[${new Date().toLocaleTimeString()}] SECURE SESSION ESTABLISHED FOR [ ${user.uid} ]`] }));
+                setTelemetry(prev => ({ ...prev, logs: [`[${new Date().toISOString().substring(0, 10)} ${new Date().toLocaleTimeString()}] SECURE SESSION ESTABLISHED FOR [ ${user.uid} ]`] }));
             } else {
                 setUid(null);
                 setTelemetry({
@@ -45,7 +45,7 @@ export const TelemetryProvider = ({ children }: { children: ReactNode }) => {
                     anomalies: 0,
                     activeNodes: 0,
                     latency: 4,
-                    logs: [`[${new Date().toLocaleTimeString()}] AWAITING AUTHENTICATION...`]
+                    logs: [`[${new Date().toISOString().substring(0, 10)} ${new Date().toLocaleTimeString()}] AWAITING AUTHENTICATION...`]
                 });
             }
         });
@@ -73,11 +73,9 @@ export const TelemetryProvider = ({ children }: { children: ReactNode }) => {
                         newLogs = Object.values(data.logs); // Support nested firebase pushes
                     }
                 }
-
-                // Keep the last 15 elements
-                if (newLogs.length > 15) {
-                    newLogs = newLogs.slice(-15);
-                }
+                // Filter logs to only include today's logs
+                const todayPrefix = `[${new Date().toISOString().substring(0, 10)}`;
+                newLogs = newLogs.filter(log => typeof log === 'string' && log.startsWith(todayPrefix));
 
                 if (newLogs.length === 0) {
                     newLogs = telemetry.logs;
@@ -100,7 +98,9 @@ export const TelemetryProvider = ({ children }: { children: ReactNode }) => {
     const logSysEvent = async (msg: string) => {
         if (!dbInstance || !uid) return;
         const logsRef = ref(dbInstance, `telemetry/${uid}/logs`);
-        await push(logsRef, `[${new Date().toLocaleTimeString()}] ${msg}`);
+        const todayStr = new Date().toISOString().substring(0, 10);
+        const timeStr = new Date().toLocaleTimeString();
+        await push(logsRef, `[${todayStr} ${timeStr}] ${msg}`);
     };
 
     const updateActiveNodes = async (change: number) => {
