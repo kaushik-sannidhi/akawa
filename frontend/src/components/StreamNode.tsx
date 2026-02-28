@@ -47,6 +47,34 @@ function tuneVideoSender(pc: RTCPeerConnection) {
     }
 }
 
+/**
+ * Prefer H.264 in an SDP offer/answer so Safari (which only supports H.264 hardware
+ * decode) works reliably.  If no H.264 payload type is found the SDP is returned
+ * unchanged.
+ */
+function preferH264(sdp: string): string {
+    const lines = sdp.split("\r\n");
+    const mVideoIdx = lines.findIndex(l => l.startsWith("m=video"));
+    if (mVideoIdx === -1) return sdp;
+
+    // Collect H.264 payload type numbers from rtpmap lines
+    const h264PTs: string[] = [];
+    for (const line of lines) {
+        const match = line.match(/^a=rtpmap:(\d+)\s+H264\//i);
+        if (match) h264PTs.push(match[1]);
+    }
+    if (h264PTs.length === 0) return sdp; // No H.264 — leave SDP as-is
+
+    // Reorder the m=video line: move H.264 payload types to front
+    const parts = lines[mVideoIdx].split(" ");
+    // parts[0]="m=video", [1]=port, [2]=proto, [3..]=payload types
+    const existingPTs = parts.slice(3);
+    const nonH264PTs = existingPTs.filter(pt => !h264PTs.includes(pt));
+    lines[mVideoIdx] = [...parts.slice(0, 3), ...h264PTs, ...nonH264PTs].join(" ");
+
+    return lines.join("\r\n");
+}
+
 interface StreamNodeProps {
     stream: any;
     onDelete: (id: string, cascadeDelete: boolean) => void;
@@ -132,13 +160,11 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
         // On mobile Safari, re-assigning srcObject can kick the decoder
         if (!isOwnerOfClientCam) {
-            // Viewer side — reconnect the remote stream from the PC
+            // Viewer side — rebuild the stream from all receiver tracks (audio + video)
             const pc = peerConnectionsRef.current.get("provider");
             if (pc) {
                 const receivers = pc.getReceivers();
-                const videoReceiver = receivers.find(r => r.track?.kind === "video");
-                if (videoReceiver && videoReceiver.track) {
-                    // Build a fresh MediaStream from the existing tracks
+                if (receivers.length > 0) {
                     const stream = new MediaStream();
                     receivers.forEach(r => { if (r.track) stream.addTrack(r.track); });
                     video.srcObject = stream;
@@ -311,18 +337,31 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         });
 
                         // ICE candidates → signaling server
+                        // Send null candidate too (end-of-candidates — needed by Safari)
                         pc.onicecandidate = (e) => {
-                            if (e.candidate && signalWs?.readyState === WebSocket.OPEN) {
+                            if (signalWs?.readyState !== WebSocket.OPEN) return;
+                            if (e.candidate) {
                                 signalWs.send(JSON.stringify({
                                     type: "ice-candidate",
                                     peerId,
                                     candidate: e.candidate.toJSON(),
                                 }));
+                            } else {
+                                // null candidate = end-of-candidates
+                                signalWs.send(JSON.stringify({
+                                    type: "ice-candidate",
+                                    peerId,
+                                    candidate: null,
+                                }));
                             }
                         };
 
-                        // Create & send offer
-                        const offer = await pc.createOffer();
+                        // Create & send offer — prefer H.264 for Safari compatibility
+                        const offer = await pc.createOffer({
+                            offerToReceiveAudio: false,
+                            offerToReceiveVideo: false,
+                        });
+                        offer.sdp = preferH264(offer.sdp || "");
                         await pc.setLocalDescription(offer);
 
                         // Apply low-latency sender tuning once local description is set
@@ -348,8 +387,13 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
                     if (msg.type === "ice-candidate" && msg.peerId) {
                         const pc = peerConnectionsRef.current.get(msg.peerId);
-                        if (pc && msg.candidate) {
-                            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+                        if (pc) {
+                            if (msg.candidate) {
+                                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+                            } else {
+                                // null candidate = end-of-candidates signal
+                                await pc.addIceCandidate(undefined as any).catch(() => {});
+                            }
                         }
                     }
 
@@ -455,15 +499,26 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
 
                     if (msg.type === "offer") {
                         console.log(`[WebRTC Viewer] Received offer, creating answer`);
+
+                        // Close any stale previous PC before creating a new one
+                        const oldPc = peerConnectionsRef.current.get("provider");
+                        if (oldPc) { oldPc.close(); peerConnectionsRef.current.delete("provider"); }
+
                         const pc = new RTCPeerConnection(ICE_SERVERS);
                         peerConnectionsRef.current.set("provider", pc);
 
-                        // When we receive the remote video track
+                        // Accumulate tracks into a single MediaStream so both
+                        // video and audio end up on the <video> element — Safari
+                        // sometimes fires ontrack with an empty e.streams[].
+                        const combinedStream = new MediaStream();
+
                         pc.ontrack = (e) => {
                             console.log("[WebRTC Viewer] Got remote track", e.track.kind);
-                            if (remoteVideoRef.current && e.streams[0]) {
-                                remoteVideoRef.current.srcObject = e.streams[0];
-                                // Ensure muted for autoplay (mobile requires this)
+                            combinedStream.addTrack(e.track);
+
+                            if (remoteVideoRef.current) {
+                                remoteVideoRef.current.srcObject = combinedStream;
+                                // Muted for autoplay (mobile requires this)
                                 remoteVideoRef.current.muted = true;
                                 safePlay(remoteVideoRef.current);
                                 setVideoLoaded(true);
@@ -472,12 +527,20 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                             }
                         };
 
+                        // Send null candidate too (end-of-candidates — Safari compat)
                         pc.onicecandidate = (e) => {
-                            if (e.candidate && signalWs?.readyState === WebSocket.OPEN) {
+                            if (signalWs?.readyState !== WebSocket.OPEN) return;
+                            if (e.candidate) {
                                 signalWs.send(JSON.stringify({
                                     type: "ice-candidate",
                                     peerId: myPeerId,
                                     candidate: e.candidate.toJSON(),
+                                }));
+                            } else {
+                                signalWs.send(JSON.stringify({
+                                    type: "ice-candidate",
+                                    peerId: myPeerId,
+                                    candidate: null,
                                 }));
                             }
                         };
@@ -488,12 +551,18 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                                 setIsStreaming(false);
                                 setVideoLoaded(false);
                             }
+                            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+                                setIsStreaming(true);
+                            }
                         };
 
+                        // Apply H.264 preference to the incoming offer for Safari
+                        const offerSdp = preferH264(msg.sdp || "");
                         await pc.setRemoteDescription(
-                            new RTCSessionDescription({ type: "offer", sdp: msg.sdp })
+                            new RTCSessionDescription({ type: "offer", sdp: offerSdp })
                         );
                         const answer = await pc.createAnswer();
+                        answer.sdp = preferH264(answer.sdp || "");
                         await pc.setLocalDescription(answer);
 
                         signalWs!.send(JSON.stringify({
@@ -503,10 +572,15 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         }));
                     }
 
-                    if (msg.type === "ice-candidate" && msg.candidate) {
+                    if (msg.type === "ice-candidate") {
                         const pc = peerConnectionsRef.current.get("provider");
                         if (pc) {
-                            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+                            if (msg.candidate) {
+                                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(() => {});
+                            } else {
+                                // null = end-of-candidates
+                                await pc.addIceCandidate(undefined as any).catch(() => {});
+                            }
                         }
                     }
                 };
@@ -721,8 +795,10 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         ref={localVideoRef}
                         className="absolute inset-0 h-full w-full object-cover z-10"
                         style={{ transform: "translateZ(0)" }}
+                        autoPlay
                         muted
                         playsInline
+                        webkit-playsinline=""
                         onLoadedData={() => setVideoLoaded(true)}
                     />
                 )}
@@ -733,8 +809,11 @@ export default function StreamNode({ stream, onDelete, onDetections, onSelect, i
                         ref={remoteVideoRef}
                         className="absolute inset-0 h-full w-full object-cover z-10"
                         style={{ transform: "translateZ(0)" }}
+                        autoPlay
                         muted={isMuted}
                         playsInline
+                        webkit-playsinline=""
+                        onLoadedMetadata={() => { setVideoLoaded(true); setShowPlayButton(false); }}
                         onLoadedData={() => { setVideoLoaded(true); setShowPlayButton(false); }}
                     />
                 )}

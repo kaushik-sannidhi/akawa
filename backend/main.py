@@ -95,7 +95,7 @@ async def preload_model():
     print("[STARTUP] Pre-loading YOLO weapon detector...")
     get_detector("latest")
     
-    print("[STARTUP] Restoring streams from Firebase...")
+    print("[STARTUP] Restoring persistent streams from Firebase...")
     try:
         resp = requests.get(f"{FIREBASE_RTDB_BASE}/streams.json")
         if resp.status_code == 200 and resp.json():
@@ -103,9 +103,16 @@ async def preload_model():
             for user_uid, streams_dict in streams_by_user.items():
                 if isinstance(streams_dict, dict):
                     for st_id, st_data in streams_dict.items():
+                        st_type = st_data.get("type", "rtsp")
+                        # client_cam streams are ephemeral — the browser must reconnect.
+                        # Only restore server_cam / rtsp streams that the backend can
+                        # drive on its own.
+                        if st_type == "client_cam":
+                            print(f"[STARTUP]   Skipping client_cam stream {st_id} (ephemeral)")
+                            continue
                         stream_manager.add_stream(
                             name=st_data.get("name", "Unknown"),
-                            stream_type=st_data.get("type", "rtsp"),
+                            stream_type=st_type,
                             source=st_data.get("source", "0"),
                             uid=user_uid,
                             model_id=st_data.get("model_id", "latest"),
@@ -351,8 +358,37 @@ class StreamCreateRequest(BaseModel):
     device_id: str = ""
 
 
+_firebase_stream_cache: dict = {}  # uid -> {"ts": float, "data": dict}
+
 @app.get("/api/streams")
 def list_streams(uid: str = "anonymous"):
+    import time as _time
+
+    # Cross-reference Firebase to purge streams the user already removed there.
+    # We cache the Firebase response for 10 s per uid so we don't hammer RTDB on every poll.
+    now = _time.time()
+    cache_entry = _firebase_stream_cache.get(uid, {"ts": 0, "data": {}})
+    if now - cache_entry["ts"] > 10:
+        try:
+            fb_resp = requests.get(
+                f"{FIREBASE_RTDB_BASE}/streams/{uid}.json", timeout=4
+            )
+            if fb_resp.status_code == 200:
+                fb_data = fb_resp.json() or {}
+                _firebase_stream_cache[uid] = {"data": fb_data, "ts": now}
+
+                # Remove in-memory streams that no longer exist in Firebase
+                valid_ids = set(fb_data.keys()) if isinstance(fb_data, dict) else set()
+                stale_ids = [
+                    sid for sid, s in stream_manager.streams.items()
+                    if s.uid == uid and sid not in valid_ids
+                ]
+                for sid in stale_ids:
+                    logger.info(f"[SYNC] Purging stale stream {sid} (not in Firebase)")
+                    stream_manager.remove_stream(sid)
+        except Exception as e:
+            logger.warning(f"[SYNC] Firebase cross-ref failed: {e}")
+
     all_streams = stream_manager.list_streams()
     user_streams = [s for s in all_streams if s.get("uid") == uid]
     return {"streams": user_streams}
