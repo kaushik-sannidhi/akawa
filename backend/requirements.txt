@@ -6,4 +6,3 @@ pillow
 numpy
 python-multipart
 websockets
-timm
