@@ -75,7 +75,7 @@ export default function LiveStreamPage() {
 
     const handleDetections = (detections: any[], timestamp: number) => {
         const threats = detections.filter(
-            (d: any) => ["rifle", "handgun", "knife", "weapon", "gunshot", "glassbreak"].includes(d.class_name) && d.confidence >= 0.45
+            (d: any) => ["rifle", "handgun", "knife", "weapon", "violence", "gunshot", "glassbreak"].includes(d.class_name) && d.confidence >= 0.45
         );
         const activeEvents = [...threats];
 

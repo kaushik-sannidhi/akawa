@@ -10,7 +10,7 @@ import { auth } from "@/lib/firebase";
 import { Bell, X } from "lucide-react";
 import { analyzeVideoWithVLM } from "@/lib/vlmApi";
 
-const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"];
+const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon", "violence"];
 
 export default function UploadAnalysisPage() {
     const [videoData, setVideoData] = useState<any>(null);

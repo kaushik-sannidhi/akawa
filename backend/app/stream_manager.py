@@ -253,7 +253,7 @@ class StreamManager:
 
                 t0 = time.time()
                 detections = await asyncio.to_thread(
-                    proxy_fast_vision_frame, frame)
+                    proxy_fast_vision_frame, frame, source_type="live")
                 latency_ms = int((time.time() - t0) * 1000)
 
                 stream.latest_detections = detections

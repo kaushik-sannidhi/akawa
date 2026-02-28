@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { getBaseUrl } from "@/lib/config";
 import { auth } from "@/lib/firebase";
 
-const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon"];
+const WEAPON_CLASSES = ["rifle", "handgun", "knife", "weapon", "violence"];
 
 type FrameDetections = {
     timestamp: number;
