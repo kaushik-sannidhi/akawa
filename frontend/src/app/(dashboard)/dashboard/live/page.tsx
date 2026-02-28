@@ -90,7 +90,11 @@ export default function LiveStreamPage() {
 
     const handleDetections = (detections: any[], timestamp: number) => {
         const threats = detections.filter(
-            (d: any) => ["gun", "knife", "violence", "gunshot", "glassbreak"].includes(d.class_name) && d.confidence >= 0.45
+            (d: any) =>
+                (d.is_threat ||
+                    ["gun", "knife", "weapon", "violence", "gunshot", "glassbreak"].includes(d.class_name) ||
+                    ["weapon", "fall", "violent_person"].includes(d.detection_type ?? "")) &&
+                d.confidence >= 0.45
         );
         const activeEvents = [...threats];
 
@@ -113,7 +117,9 @@ export default function LiveStreamPage() {
                     } else {
                         updated.unshift({
                             id: Date.now() + Math.random(),
-                            class_name: event.class_name,
+                            class_name: event.detection_type === "violent_person" ? "violence"
+                                : event.detection_type === "fall" ? "fall"
+                                    : event.class_name,
                             confidence: event.confidence,
                             startTimestamp: timestamp,
                             endTimestamp: timestamp,
@@ -254,8 +260,8 @@ export default function LiveStreamPage() {
                 ) : (
                     /* Even grid — no primary selected */
                     <div className={`flex-1 grid gap-[2px] bg-[var(--color-iron)] border-[2px] border-[var(--color-iron)] overflow-y-auto min-h-[240px] ${orderedStreams.length === 2 ? "grid-cols-1 sm:grid-cols-2" :
-                            orderedStreams.length <= 4 ? "grid-cols-2" :
-                                "grid-cols-2 lg:grid-cols-3"
+                        orderedStreams.length <= 4 ? "grid-cols-2" :
+                            "grid-cols-2 lg:grid-cols-3"
                         } auto-rows-[minmax(200px,_1fr)]`}>
                         {orderedStreams.map(s => (
                             <StreamNode
