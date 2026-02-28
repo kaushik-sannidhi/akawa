@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Trash2, Volume2, VolumeX, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
@@ -29,6 +29,11 @@ export default function StreamNode({
     const videoRef = useRef<HTMLVideoElement>(null);
     const imgRef = useRef<HTMLImageElement>(null);
     const overlayRef = useRef<HTMLCanvasElement>(null);
+
+    // Stable refs to avoid effect dependency churn
+    const onDetectionsRef = useRef(onDetections);
+    onDetectionsRef.current = onDetections;
+    const drawDetectionsRef = useRef<(d: any[]) => void>(() => { });
     const localStreamRef = useRef<MediaStream | null>(null);
     const aiWsRef = useRef<WebSocket | null>(null);
 
@@ -106,6 +111,9 @@ export default function StreamNode({
             ctx.fillText(text, x1 + 4, y1 - (labelH * 0.25));
         });
     }, []);
+
+    // Keep drawDetections ref current
+    drawDetectionsRef.current = drawDetections;
 
     /* ------------------------------------------------------------------ */
     /*  PROVIDER: capture camera → send frames to backend via WebSocket    */
@@ -218,6 +226,8 @@ export default function StreamNode({
         let viewerWs: WebSocket | null = null;
         let pingInterval: ReturnType<typeof setInterval> | null = null;
 
+        let loadedOnce = false;
+
         const connect = () => {
             if (!active) return;
             setNetState("connecting_ws");
@@ -240,13 +250,13 @@ export default function StreamNode({
                     // Render frame if present
                     if (data.type === "frame" && data.frame && imgRef.current) {
                         imgRef.current.src = "data:image/jpeg;base64," + data.frame;
-                        if (!videoLoaded) setVideoLoaded(true);
+                        if (!loadedOnce) { loadedOnce = true; setVideoLoaded(true); }
                     }
 
                     // Draw detection overlay
                     if (data.detections) {
-                        requestAnimationFrame(() => drawDetections(data.detections));
-                        onDetections(data.detections, data.timestamp);
+                        requestAnimationFrame(() => drawDetectionsRef.current(data.detections));
+                        onDetectionsRef.current(data.detections, data.timestamp);
                     }
                 } catch { /* ignore */ }
             };
@@ -266,7 +276,7 @@ export default function StreamNode({
             if (pingInterval) clearInterval(pingInterval);
             if (viewerWs) viewerWs.close();
         };
-    }, [isClientCam, isOwner, stream.id, drawDetections, onDetections, videoLoaded]);
+    }, [isClientCam, isOwner, stream.id]);
 
     /* ------------------------------------------------------------------ */
     /*  Provider also needs to receive detection results from backend       */
@@ -293,8 +303,8 @@ export default function StreamNode({
                 try {
                     const data = JSON.parse(event.data);
                     if (data.detections) {
-                        requestAnimationFrame(() => drawDetections(data.detections));
-                        onDetections(data.detections, data.timestamp);
+                        requestAnimationFrame(() => drawDetectionsRef.current(data.detections));
+                        onDetectionsRef.current(data.detections, data.timestamp);
                     }
                 } catch { /* ignore */ }
             };
@@ -309,7 +319,7 @@ export default function StreamNode({
             if (pingInterval) clearInterval(pingInterval);
             if (detWs) detWs.close();
         };
-    }, [isClientCam, isOwner, stream.id, drawDetections, onDetections]);
+    }, [isClientCam, isOwner, stream.id]);
 
     /* ------------------------------------------------------------------ */
     /*  Audio mute control                                                 */

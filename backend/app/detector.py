@@ -26,7 +26,20 @@ class WeaponDetector:
             self.model = YOLO(resolved_path)
             if torch.cuda.is_available():
                 self.model.to("cuda")
-                print(f"[WeaponDetector] Model loaded on GPU (CUDA) with FP16={self.use_half}")
+                # Warmup inference to catch CUDA kernel incompatibility early
+                try:
+                    import numpy as _np
+                    _dummy = _np.zeros((64, 64, 3), dtype=_np.uint8)
+                    self.model.predict(_dummy, verbose=False, half=self.use_half, imgsz=64)
+                    print(f"[WeaponDetector] Model loaded on GPU (CUDA) with FP16={self.use_half}")
+                except RuntimeError as cuda_err:
+                    if "CUDA" in str(cuda_err) or "no kernel image" in str(cuda_err):
+                        print(f"[WeaponDetector] CUDA kernel error during warmup: {cuda_err}")
+                        print(f"[WeaponDetector] Falling back to CPU")
+                        self.model.to("cpu")
+                        self.use_half = False
+                    else:
+                        raise
             else:
                 print(f"[WeaponDetector] CUDA not available, running on CPU")
         except Exception as e:
@@ -34,8 +47,13 @@ class WeaponDetector:
             fallback = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "yolo11m.pt")
             print(f"[WeaponDetector] Falling back to {fallback}")
             self.model = YOLO(fallback)
+            self.use_half = False
             if torch.cuda.is_available():
-                self.model.to("cuda")
+                try:
+                    self.model.to("cuda")
+                except Exception:
+                    print(f"[WeaponDetector] GPU fallback also failed, staying on CPU")
+                    self.model.to("cpu")
 
     def _resolve_model_path(self, model_path):
         """Resolves a model path from an ID or finds the latest one."""
@@ -109,16 +127,34 @@ class WeaponDetector:
         Returns a list of detection dicts with normalized bounding boxes.
         """
         with self.lock:
-            results = self.model.track(
-                frame,
-                verbose=False,
-                half=self.use_half,
-                imgsz=448,
-                persist=True,
-                tracker="botsort.yaml",
-                agnostic_nms=True,
-                max_det=20,
-            )
+            try:
+                results = self.model.track(
+                    frame,
+                    verbose=False,
+                    half=self.use_half,
+                    imgsz=448,
+                    persist=True,
+                    tracker="botsort.yaml",
+                    agnostic_nms=True,
+                    max_det=20,
+                )
+            except RuntimeError as e:
+                if "CUDA" in str(e) or "no kernel image" in str(e):
+                    print(f"[WeaponDetector] CUDA error during inference, moving to CPU: {e}")
+                    self.model.to("cpu")
+                    self.use_half = False
+                    results = self.model.track(
+                        frame,
+                        verbose=False,
+                        half=False,
+                        imgsz=448,
+                        persist=True,
+                        tracker="botsort.yaml",
+                        agnostic_nms=True,
+                        max_det=20,
+                    )
+                else:
+                    raise
 
         detections = []
         names = self.model.names
@@ -168,16 +204,34 @@ class WeaponDetector:
         all_detections = []
 
         with self.lock:
-            results = self.model.track(
-                frames,
-                verbose=False,
-                half=self.use_half,
-                imgsz=448,
-                persist=True,
-                tracker="botsort.yaml",
-                agnostic_nms=True,
-                max_det=20,
-            )
+            try:
+                results = self.model.track(
+                    frames,
+                    verbose=False,
+                    half=self.use_half,
+                    imgsz=448,
+                    persist=True,
+                    tracker="botsort.yaml",
+                    agnostic_nms=True,
+                    max_det=20,
+                )
+            except RuntimeError as e:
+                if "CUDA" in str(e) or "no kernel image" in str(e):
+                    print(f"[WeaponDetector] CUDA error during batch inference, moving to CPU: {e}")
+                    self.model.to("cpu")
+                    self.use_half = False
+                    results = self.model.track(
+                        frames,
+                        verbose=False,
+                        half=False,
+                        imgsz=448,
+                        persist=True,
+                        tracker="botsort.yaml",
+                        agnostic_nms=True,
+                        max_det=20,
+                    )
+                else:
+                    raise
 
         names = self.model.names
         for r in results:
