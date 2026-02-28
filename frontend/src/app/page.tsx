@@ -376,14 +376,24 @@ export default function LandingPage() {
                                 <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="VIGILANCE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
                             </h1>
 
-                            <div className="max-w-2xl font-mono text-sm leading-relaxed text-[var(--color-silica)] mb-12 border-l-[4px] border-[var(--color-alert)] pl-4 bg-[var(--color-void)] p-4 border-y border-r border-[#333] animate-slide-in-bottom stagger-1 animate-float-subtle">
+                            <div className="max-w-2xl font-mono text-xs sm:text-sm leading-relaxed mt-10 mb-10 border-[1px] border-[var(--color-iron)] bg-[var(--color-void)] p-4 shadow-[4px_4px_0px_var(--color-iron)] hover:border-[var(--color-data)] hover:shadow-[4px_4px_0px_var(--color-data)] transition-colors animate-slide-in-bottom stagger-1 z-10 relative cursor-crosshair">
+                                <div className="font-bold text-[var(--color-data)] mb-2 flex justify-between border-b border-[var(--color-iron)] pb-2">
+                                    <span>// PROJECT_AKAWA_OVERVIEW</span>
+                                    <span className="hidden sm:inline-block animate-pulse text-[var(--color-alert)]">SYS_READY</span>
+                                </div>
+                                <p className="text-[var(--color-silica)] uppercase">
+                                    An advanced AI-driven threat detection system. Leveraging edge-optimized Computer Vision to identify firearms, aggressive kinetic behaviors, and medical emergencies instantly. Removing the human bottleneck from live surveillance.
+                                </p>
+                            </div>
+
+                            <div className="max-w-2xl font-mono text-sm leading-relaxed text-[var(--color-silica)] mb-12 border-l-[4px] border-[var(--color-alert)] pl-4 bg-[var(--color-void)] p-4 border-y border-r border-[#333] animate-slide-in-bottom stagger-2 animate-float-subtle">
                                 <p className="mb-4 text-[var(--color-alert)] font-bold">// TWO-STAGE ARCHITECTURE:</p>
                                 <p>
                                     TRANSFORM PASSIVE CAMPUS HARDWARE INTO AN UNBLINKING PROACTIVE DEFENSE GRID. <span className="text-white font-bold bg-[#333] px-1">YOLOv11</span> FOR RAPID WEAPON CLASSIFICATION. <span className="text-white font-bold bg-[#333] px-1">LMST MODEL</span> FOR KINEMATIC STANCE TRACKING.
                                 </p>
                             </div>
 
-                            <div className="flex flex-col sm:flex-row gap-0 animate-slide-in-bottom stagger-2">
+                            <div className="flex flex-col sm:flex-row gap-0 animate-slide-in-bottom stagger-3">
                                 <Link href="/signup" className="btn-alert text-xl md:text-2xl py-6 px-8 flex-1 text-center font-bold relative overflow-hidden group">
                                     <span className="relative z-10">[ DEPLOY_INSTANCE ]</span>
                                     <div className="absolute inset-0 bg-white translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-in-out z-0"></div>

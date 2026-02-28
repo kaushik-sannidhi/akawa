@@ -8,7 +8,6 @@ import { onAuthStateChanged } from "firebase/auth";
 // Alert type configuration
 export type AlertTypeConfig = {
     email: boolean;
-    telegram: boolean;
     contacts: string[];
 };
 
@@ -21,24 +20,20 @@ export type AlertTypesMap = {
 
 export type NotificationSettings = {
     email: string;
-    telegram_id: string;
     email_enabled: boolean;
-    telegram_enabled: boolean;
     alert_types: AlertTypesMap;
 };
 
-const DEFAULT_ALERT_TYPE: AlertTypeConfig = { email: true, telegram: false, contacts: [] };
+const DEFAULT_ALERT_TYPE: AlertTypeConfig = { email: true, contacts: [] };
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
     email: "",
-    telegram_id: "",
     email_enabled: true,
-    telegram_enabled: false,
     alert_types: {
-        gun: { email: true, telegram: false, contacts: [] },
-        knife: { email: true, telegram: false, contacts: [] },
-        fall: { email: true, telegram: false, contacts: [] },
-        fight: { email: true, telegram: false, contacts: [] },
+        gun: { email: true, contacts: [] },
+        knife: { email: true, contacts: [] },
+        fall: { email: true, contacts: [] },
+        fight: { email: true, contacts: [] },
     },
 };
 
@@ -102,9 +97,7 @@ export const SettingsProvider = ({ children }: { children: ReactNode }) => {
                         const data = snapshot.val();
                         setNotificationSettings({
                             email: data.email || user.email || "",
-                            telegram_id: data.telegram_id || "",
                             email_enabled: data.email_enabled ?? true,
-                            telegram_enabled: data.telegram_enabled ?? false,
                             alert_types: {
                                 gun: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.gun },
                                 knife: { ...DEFAULT_ALERT_TYPE, ...data.alert_types?.knife },

@@ -2,8 +2,16 @@ name = "akawa-email-worker"
 main = "src/index.ts"
 compatibility_date = "2024-09-25"
 
+# To deploy:
+#   1. cd cloudflare-email-worker
+#   2. npm install
+#   3. npx wrangler login            (one-time)
+#   4. npx wrangler secret put RESEND_API_KEY   (paste your key from resend.com/api-keys)
+#   5. npm run deploy
+
 [vars]
-FROM_EMAIL = "alerts@itsakawa.tech"
+# Change FROM_EMAIL to your verified domain sender once DNS is set up on Resend.
+# Until then, use the free sandbox: "onboarding@resend.dev"
+FROM_EMAIL = "onboarding@resend.dev"
 FROM_NAME = "Akawa Security Alerts"
 WORKER_SECRET = "akawa-alerts-secret-key-2026"
-

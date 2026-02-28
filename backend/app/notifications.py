@@ -9,11 +9,8 @@ logger = logging.getLogger(__name__)
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
 
 # Cloudflare email worker
-EMAIL_WORKER_URL = os.getenv("EMAIL_WORKER_URL", "https://akawa-email-worker.ingeniumstem.workers.dev/send")
+EMAIL_WORKER_URL = os.getenv("EMAIL_WORKER_URL", "https://akawa-email-worker.kaushik-sannidhi.workers.dev/send")
 EMAIL_WORKER_SECRET = os.getenv("EMAIL_WORKER_SECRET", "akawa-alerts-secret-key-2026")
-
-# Telegram Bot API
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # Alert type categories — maps model class names to alert types
 ALERT_TYPE_MAP: Dict[str, str] = {
@@ -62,7 +59,7 @@ class NotificationManager:
         """
         Dispatch alerts based on per-alert-type configuration.
         Reads the user's alerts_config from Firebase and routes to
-        email and/or telegram based on the alert_type settings.
+        email based on the alert_type settings.
         Implements a 30-second cooldown per user/alert_type unless forced.
         """
         now = time.time()
@@ -80,9 +77,7 @@ class NotificationManager:
 
         # Global channel settings
         email_enabled_global = settings.get("email_enabled", True)
-        telegram_enabled_global = settings.get("telegram_enabled", False)
         user_email = settings.get("email", "")
-        telegram_id = settings.get("telegram_id", "")
 
         # Per-alert-type settings
         alert_types_config = settings.get("alert_types", {})
@@ -90,10 +85,9 @@ class NotificationManager:
 
         # If no per-type config exists, fall back to global settings
         type_email_enabled = type_config.get("email", email_enabled_global)
-        type_telegram_enabled = type_config.get("telegram", telegram_enabled_global)
         extra_contacts: List[str] = type_config.get("contacts", [])
 
-        # 1. Email: send to user + extra contacts
+        # Email: send to user + extra contacts
         if type_email_enabled and email_enabled_global:
             recipients = []
             if user_email:
@@ -103,10 +97,6 @@ class NotificationManager:
                     recipients.append(contact)
             if recipients:
                 self.send_email(recipients, title, message)
-
-        # 2. Telegram
-        if type_telegram_enabled and telegram_enabled_global and telegram_id and TELEGRAM_BOT_TOKEN:
-            self.send_telegram(telegram_id, f"🚨 {title}\n\n{message}")
 
     def send_alert(
         self,
@@ -155,26 +145,9 @@ class NotificationManager:
             if resp.status_code == 200:
                 logger.info(f"Email alert sent to {recipients}")
             else:
-                logger.error(f"Email worker returned {resp.status_code}: {resp.text}")
+                logger.error(f"Email worker returned {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             logger.error(f"Failed to send email alert: {e}")
-
-    def send_telegram(self, chat_id: str, text: str):
-        """Send Telegram message via Bot API."""
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            payload = {
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-            }
-            resp = requests.post(url, json=payload, timeout=10)
-            if resp.status_code == 200:
-                logger.info(f"Telegram alert sent to {chat_id}")
-            else:
-                logger.error(f"Telegram API returned {resp.status_code}: {resp.text}")
-        except Exception as e:
-            logger.error(f"Failed to send Telegram alert: {e}")
 
 
 notification_manager = NotificationManager()

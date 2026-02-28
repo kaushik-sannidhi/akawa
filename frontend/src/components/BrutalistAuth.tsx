@@ -10,8 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 export function BrutalistAuth({ initialView = "login" }: { initialView?: "login" | "signup" }) {
     const [view, setView] = useState<"login" | "signup" | "onboarding">(initialView as any);
-    const [telegramId, setTelegramId] = useState("");
-    const [email, setEmail] = useState("admin@akawa.os");
+    const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
@@ -32,12 +31,10 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                 const user = auth.currentUser;
                 if (user) {
                     try {
-                        const defaultAlertType = { email: true, telegram: !!telegramId, contacts: [] };
+                        const defaultAlertType = { email: true, contacts: [] };
                         await set(ref(db, `alerts_config/${user.uid}`), {
                             email: email,
-                            telegram_id: telegramId || "",
                             email_enabled: true,
-                            telegram_enabled: !!telegramId,
                             alert_types: {
                                 gun: { ...defaultAlertType },
                                 knife: { ...defaultAlertType },
@@ -118,7 +115,7 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
 
                 <div className="relative z-10 mb-24">
                     <h1 className="text-6xl lg:text-8xl font-black text-white leading-[0.85] uppercase break-words mix-blend-difference mb-8">
-                        {view === "login" ? "SYSTEM\nLOGIN" : view === "signup" ? "INITIALIZE\nWORKSPACE" : "MOBILE\nALERTS"}
+                        {view === "login" ? "SYSTEM\nLOGIN" : view === "signup" ? "INITIALIZE\nWORKSPACE" : "EMAIL\nALERTS"}
                     </h1>
                     <div className="border-l-[4px] border-[var(--color-alert)] pl-4">
                         <p className="font-mono text-[var(--color-silica)] text-sm max-w-sm uppercase font-bold">
@@ -213,22 +210,6 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                     </>
                                 ) : (
                                     <>
-                                        <div className="space-y-2">
-                                            <label className="block font-mono text-xs text-[var(--color-silica)] uppercase font-bold">Telegram Phone Number (Optional)</label>
-                                            <p className="text-[10px] text-[var(--color-iron)] normal-case mb-2">
-                                                Link your Telegram to receive instant security alerts. You can also configure this later in Settings.
-                                            </p>
-                                            <div className="flex items-center">
-                                                <span className="bg-[var(--color-dim)] border-[2px] border-r-0 border-[var(--color-iron)] text-[#229ED9] px-3 py-3 font-mono text-sm font-bold">+</span>
-                                                <input
-                                                    type="tel"
-                                                    value={telegramId}
-                                                    onChange={(e) => setTelegramId(e.target.value.replace(/[^\d+]/g, ''))}
-                                                    className="w-full bg-[var(--color-dim)] border-[2px] border-[var(--color-iron)] p-3 text-[#229ED9] font-mono text-sm focus:border-[#229ED9] focus:outline-none transition-colors rounded-none placeholder:text-[var(--color-iron)]"
-                                                    placeholder="1234567890"
-                                                />
-                                            </div>
-                                        </div>
 
                                         <div className="bg-[var(--color-dim)] border border-[var(--color-iron)] p-3 mt-2">
                                             <p className="text-[10px] text-[var(--color-data)] font-bold mb-1">📧 EMAIL ALERTS: ENABLED BY DEFAULT</p>
@@ -245,19 +226,10 @@ export function BrutalistAuth({ initialView = "login" }: { initialView?: "login"
                                         disabled={loading}
                                         className="w-full bg-[var(--color-alert)] text-black font-bold uppercase tracking-widest py-4 border-[2px] border-[var(--color-alert)] hover:bg-black hover:text-[var(--color-alert)] transition-none text-sm disabled:opacity-50 disabled:cursor-not-allowed group relative overflow-hidden"
                                     >
-                                        <span className="relative z-10">{loading ? "[ PROCESSING... ]" : (view === "login" ? "[ INITIATE_LOGIN ]" : view === "signup" ? "[ ALLOCATE_WORKSPACE ]" : "[ SAVE & ENTER DASHBOARD →  ]")}</span>
+                                        <span className="relative z-10">{loading ? "[ PROCESSING... ]" : (view === "login" ? "[ INITIATE_LOGIN ]" : view === "signup" ? "[ ALLOCATE_WORKSPACE ]" : "[ ENTER DASHBOARD →  ]")}</span>
                                         {/* Hover glitch effect */}
                                         <div className="absolute inset-0 bg-white translate-x-[-100%] group-hover:translate-x-full transition-transform duration-500 opacity-20 pointer-events-none" />
                                     </button>
-                                    {view === "onboarding" && (
-                                        <button
-                                            type="button"
-                                            onClick={() => router.push("/dashboard")}
-                                            className="w-full bg-transparent text-[var(--color-silica)] font-bold uppercase tracking-widest py-3 border-[2px] border-[var(--color-iron)] hover:border-[var(--color-silica)] hover:text-white transition-none text-xs"
-                                        >
-                                            [ SKIP — I&apos;LL SET THIS UP LATER ]
-                                        </button>
-                                    )}
                                 </div>
                             </form>
                         </motion.div>

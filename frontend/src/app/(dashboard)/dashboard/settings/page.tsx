@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useSettings, AlertTypeConfig } from "@/context/SettingsContext";
 import { useTelemetry } from "@/context/TelemetryContext";
 import { getBaseUrl } from "@/lib/config";
-import { Plus, X, Mail, Send } from "lucide-react";
+import { Plus, X, Mail } from "lucide-react";
 
 type ModelOption = { id: string; name: string };
 
@@ -197,42 +197,6 @@ export default function SettingsPage() {
                                 </p>
                             </div>
                         </div>
-
-                        {/* Telegram Channel */}
-                        <div className="border border-[var(--color-iron)] p-4">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="flex items-center gap-3">
-                                    <Send className="w-4 h-4 text-[#229ED9]" />
-                                    <span className="font-bold text-xs text-[#229ED9]">TELEGRAM ALERTS</span>
-                                </div>
-                                <label className="flex items-center gap-2 cursor-crosshair">
-                                    <span className="text-[10px] text-[var(--color-silica)]">
-                                        {notificationSettings.telegram_enabled ? "ENABLED" : "DISABLED"}
-                                    </span>
-                                    <input
-                                        type="checkbox"
-                                        checked={notificationSettings.telegram_enabled}
-                                        onChange={(e) => setNotificationSettings({ ...notificationSettings, telegram_enabled: e.target.checked })}
-                                        className="w-4 h-4 appearance-none border-[1px] border-[var(--color-iron)] checked:bg-[#229ED9] checked:border-[#229ED9] cursor-crosshair focus:outline-none"
-                                    />
-                                </label>
-                            </div>
-                            <div className={notificationSettings.telegram_enabled ? "" : "opacity-40 pointer-events-none"}>
-                                <div className="flex items-center">
-                                    <span className="bg-[var(--color-dim)] border-[2px] border-r-0 border-[var(--color-iron)] text-[var(--color-silica)] px-3 py-3 font-mono text-xs">TEL</span>
-                                    <input
-                                        type="text"
-                                        placeholder="TELEGRAM CHAT ID OR PHONE"
-                                        value={notificationSettings.telegram_id}
-                                        onChange={(e) => setNotificationSettings({ ...notificationSettings, telegram_id: e.target.value })}
-                                        className="w-full bg-black border-[2px] border-[var(--color-iron)] text-[#229ED9] px-4 py-3 font-mono text-xs uppercase tracking-widest focus:border-[#229ED9] outline-none"
-                                    />
-                                </div>
-                                <p className="text-[10px] text-[var(--color-silica)] mt-2">
-                                    START THE AKAWA BOT ON TELEGRAM AND ENTER YOUR CHAT ID. MESSAGES ARE SENT VIA BOT API.
-                                </p>
-                            </div>
-                        </div>
                     </div>
                 )}
             </section>
@@ -273,18 +237,7 @@ export default function SettingsPage() {
                                                 className="w-4 h-4 appearance-none border-[1px] border-[var(--color-iron)] checked:bg-[var(--color-data)] checked:border-[var(--color-data)] cursor-crosshair focus:outline-none"
                                             />
                                             <Mail className="w-3 h-3 text-[var(--color-data)]" />
-                                            <span className="text-[10px] font-bold">EMAIL</span>
-                                        </label>
-
-                                        <label className="flex items-center gap-2 cursor-crosshair">
-                                            <input
-                                                type="checkbox"
-                                                checked={config.telegram}
-                                                onChange={(e) => updateAlertType(type, { telegram: e.target.checked })}
-                                                className="w-4 h-4 appearance-none border-[1px] border-[var(--color-iron)] checked:bg-[#229ED9] checked:border-[#229ED9] cursor-crosshair focus:outline-none"
-                                            />
-                                            <Send className="w-3 h-3 text-[#229ED9]" />
-                                            <span className="text-[10px] font-bold">TELEGRAM</span>
+                                            <span className="text-[10px] font-bold">EMAIL NOTIFICATIONS</span>
                                         </label>
                                     </div>
 
