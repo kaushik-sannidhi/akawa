@@ -18,16 +18,16 @@ export default function AlertSidebar({
     return (
         <div className="w-full h-full flex flex-col bg-black border-[2px] border-[var(--color-iron)] font-mono text-xs uppercase tracking-widest text-[var(--color-data)]">
             <div className="px-4 py-3 border-b-[2px] border-[var(--color-iron)] flex justify-between items-center bg-[var(--color-dim)]">
-                <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 bg-[var(--color-alert)] animate-pulse" />
-                    <span className="font-bold text-[var(--color-silica)]">
+                <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-2 h-2 bg-[var(--color-alert)] animate-pulse flex-shrink-0" />
+                    <span className="font-bold text-[var(--color-silica)] whitespace-nowrap truncate">
                         [ ALERT_LOG // {new Date().toISOString().substring(0, 10)} ]
                     </span>
                 </div>
                 {alerts.length > 0 && onClearAll && (
                     <button
                         onClick={onClearAll}
-                        className="text-[10px] text-[var(--color-alert)] hover:text-white transition-none border-b border-transparent hover:border-white"
+                        className="text-[10px] text-[var(--color-alert)] hover:text-white transition-none border-b border-transparent hover:border-white whitespace-nowrap flex-shrink-0"
                     >
                         [ PURGE_ALL ]
                     </button>
@@ -80,7 +80,7 @@ export default function AlertSidebar({
                                         </button>
                                     )}
                                     <div className="flex items-center justify-between">
-                                        <span className={`font-bold ${textColor}`}>{displayType}</span>
+                                        <span className={`font-bold ${textColor} whitespace-nowrap`}>{displayType}</span>
                                         <span className="border border-current px-1 text-[10px]">
                                             {(alert.confidence * 100).toFixed(0)}%
                                         </span>
@@ -111,7 +111,7 @@ export default function AlertSidebar({
                                                 </div>
                                             ) : (
                                                 <div className="bg-black/50 border border-[var(--color-iron)] p-2">
-                                                    <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 border-b border-[var(--color-iron)] pb-1">[ DEEP_VISION_LOG ]</span>
+                                                    <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 border-b border-[var(--color-iron)] pb-1 whitespace-nowrap">[ DEEP_VISION_LOG ]</span>
                                                     <p className="text-[9px] text-[var(--color-data)] leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
                                                         {alert.vlmAnalysis}
                                                     </p>
@@ -123,7 +123,7 @@ export default function AlertSidebar({
                                     {/* Alert Clip Section */}
                                     {alert.clip && (
                                         <div className="mt-2 border-t border-[var(--color-iron)] pt-2">
-                                            <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1">[ ALERT_CLIP // {alert.clip.duration_seconds || "?"}s ]</span>
+                                            <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 whitespace-nowrap">[ ALERT_CLIP // {alert.clip.duration_seconds || "?"}s ]</span>
                                             <div className="flex gap-2">
                                                 {(alert.clip.clip_url || alert.clip.playback_url) && (
                                                     <a

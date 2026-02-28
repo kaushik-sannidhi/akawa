@@ -265,7 +265,7 @@ export default function UploadAnalysisPage() {
                 {!videoData ? (
                     // Ingestion State
                     <div className="flex-1 w-full flex flex-col relative">
-                        <div className="p-4 border-b-[2px] border-[var(--color-iron)] bg-[var(--color-dim)] font-bold text-xs">
+                        <div className="p-4 border-b-[2px] border-[var(--color-iron)] bg-[var(--color-dim)] font-bold text-xs whitespace-nowrap">
                             [ ARCHIVE_INGESTION_MODULE ]
                         </div>
                         <div className="flex-1 p-4 sm:p-8 lg:p-16 flex items-center justify-center">
@@ -287,20 +287,20 @@ export default function UploadAnalysisPage() {
                                             <div className="absolute top-0 left-0 w-2 h-2 border-t-[2px] border-l-[2px] border-[var(--color-alert)] -translate-x-[2px] -translate-y-[2px]" />
                                             <div className="absolute bottom-0 right-0 w-2 h-2 border-b-[2px] border-r-[2px] border-[var(--color-alert)] translate-x-[2px] translate-y-[2px]" />
 
-                                            <h3 className="text-xl font-bold text-[var(--color-alert)] mb-4">[ ALERT_CONFIG ]</h3>
+                                            <h3 className="text-xl font-bold text-[var(--color-alert)] mb-4 whitespace-nowrap">[ ALERT_CONFIG ]</h3>
                                             <p className="text-[10px] sm:text-xs text-[var(--color-silica)] mb-8">
                                                 DO YOU WANT TO RECEIVE NOTIFICATIONS (EMAIL/DISCORD/WHATSAPP/SIGNAL) IF A WEAPON OR ANOMALY IS DETECTED IN THIS UPLOAD PERIOD?
                                             </p>
                                             <div className="flex gap-4 justify-center">
                                                 <button
                                                     onClick={() => confirmAlerts(true)}
-                                                    className="px-6 py-3 font-bold border-[2px] border-[var(--color-alert)] text-[var(--color-alert)] hover:bg-[var(--color-alert)] hover:text-black transition-none uppercase shadow-[4px_4px_0_var(--color-alert)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-alert)]"
+                                                    className="px-6 py-3 font-bold border-[2px] border-[var(--color-alert)] text-[var(--color-alert)] hover:bg-[var(--color-alert)] hover:text-black transition-none uppercase shadow-[4px_4px_0_var(--color-alert)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-alert)] whitespace-nowrap"
                                                 >
                                                     [ YES ]
                                                 </button>
                                                 <button
                                                     onClick={() => confirmAlerts(false)}
-                                                    className="px-6 py-3 font-bold border-[2px] border-[var(--color-iron)] text-[var(--color-silica)] hover:border-white hover:text-white transition-none uppercase shadow-[4px_4px_0_var(--color-iron)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-iron)]"
+                                                    className="px-6 py-3 font-bold border-[2px] border-[var(--color-iron)] text-[var(--color-silica)] hover:border-white hover:text-white transition-none uppercase shadow-[4px_4px_0_var(--color-iron)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-iron)] whitespace-nowrap"
                                                 >
                                                     [ NO ]
                                                 </button>
@@ -319,7 +319,7 @@ export default function UploadAnalysisPage() {
                         <div className="flex items-center justify-between gap-3 border-b-[2px] border-[var(--color-iron)] bg-black p-3 sm:p-4 shrink-0">
                             <div className="min-w-0">
                                 <h2 className="font-bold text-xs sm:text-sm bg-[var(--color-data)] text-black inline-block px-2 max-w-full truncate">{videoData.filename}</h2>
-                                <p className="text-[10px] text-[var(--color-silica)] mt-1">
+                                <p className="text-[10px] text-[var(--color-silica)] mt-1 whitespace-nowrap truncate">
                                     [ LEN: {videoData.duration?.toFixed(2)}s | FPS: {videoData.fps?.toFixed(0)} | RES: {videoData.resolution?.width}x{videoData.resolution?.height} ]
                                 </p>
                             </div>
@@ -354,7 +354,7 @@ export default function UploadAnalysisPage() {
 
                                 <button
                                     onClick={() => setVideoData(null)}
-                                    className="px-3 sm:px-4 py-2 text-[10px] font-bold border-[2px] border-[var(--color-iron)] hover:border-[var(--color-data)] hover:bg-[var(--color-data)] hover:text-black transition-none uppercase shadow-[4px_4px_0_var(--color-iron)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-iron)] text-[var(--color-silica)]"
+                                    className="px-3 sm:px-4 py-2 text-[10px] font-bold border-[2px] border-[var(--color-iron)] hover:border-[var(--color-data)] hover:bg-[var(--color-data)] hover:text-black transition-none uppercase shadow-[4px_4px_0_var(--color-iron)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_var(--color-iron)] text-[var(--color-silica)] whitespace-nowrap flex-shrink-0"
                                 >
                                     [ CLEAR_BUFFER ]
                                 </button>
