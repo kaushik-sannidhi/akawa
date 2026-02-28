@@ -22,6 +22,7 @@ class Stream:
         self.uid = uid
         self.model_id = model_id
         self.device_id = device_id
+        self.created_at = time.time()
 
         self.status = "starting"
         self.latest_detections = []
@@ -91,21 +92,29 @@ class StreamManager:
             if stream._capture_task:
                 stream._capture_task.cancel()
 
+            # Helper to safely close websockets from any context
+            def _safe_close(ws):
+                try:
+                    asyncio.create_task(ws.close())
+                except RuntimeError:
+                    # No running event loop — ignore; WS will close when loop resumes
+                    pass
+
             # Close detection subscribers
             for ws in list(stream.detection_wss):
-                asyncio.create_task(ws.close())
+                _safe_close(ws)
             stream.detection_wss.clear()
 
             # Close fallback subscribers
             for ws in list(stream.fallback_wss):
-                asyncio.create_task(ws.close())
+                _safe_close(ws)
             stream.fallback_wss.clear()
 
             # Close signaling connections
             if stream.provider_signal_ws:
-                asyncio.create_task(stream.provider_signal_ws.close())
+                _safe_close(stream.provider_signal_ws)
             for ws in list(stream.viewer_signal_wss.values()):
-                asyncio.create_task(ws.close())
+                _safe_close(ws)
             stream.viewer_signal_wss.clear()
 
             del self.streams[stream_id]
