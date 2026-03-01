@@ -1,21 +1,8 @@
 export function getBaseUrl() {
-    if (typeof window !== "undefined") {
-        const host = window.location.hostname;
-        if (host === "localhost" || host === "127.0.0.1") {
-            return `http://${host}:8000`;
-        }
-    }
     return "https://akawa.ingeniumstem.org";
 }
 
 export function getWsUrl(path: string = "") {
-    if (typeof window !== "undefined") {
-        const host = window.location.hostname;
-        if (host === "localhost" || host === "127.0.0.1") {
-            const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-            return `${protocol}//${host}:8000${path}`;
-        }
-    }
     return `wss://akawa.ingeniumstem.org${path}`;
 }
 
