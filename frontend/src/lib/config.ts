@@ -1,8 +1,20 @@
 export function getBaseUrl() {
+    if (typeof window !== "undefined") {
+        const host = window.location.hostname;
+        if (host === "localhost" || host === "127.0.0.1") {
+            return `http://${host}:8000`;
+        }
+    }
     return "https://akawa.ingeniumstem.org";
 }
 
 export function getWsUrl() {
+    if (typeof window !== "undefined") {
+        const host = window.location.hostname;
+        if (host === "localhost" || host === "127.0.0.1") {
+            return `ws://${host}`;
+        }
+    }
     return "wss://akawa.ingeniumstem.org";
 }
 
