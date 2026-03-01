@@ -47,6 +47,7 @@ default_origins = [
     "https://www.itsakawa.tech",
     "https://akawa.vercel.app",
     "https://akawa.onrender.com",
+    "https://backend.itsakawa.tech",
 ]
 env_origins = os.getenv("BACKEND_CORS_ORIGINS", "")
 configured_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
