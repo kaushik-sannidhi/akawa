@@ -7,7 +7,7 @@ app = modal.App("akawa-llm-intelligence")
 vllm_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "vllm==0.5.4",
+        "vllm==0.5.5",
         "hf-transfer==0.1.8"
     )
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
@@ -40,6 +40,15 @@ class AkawaIntelligence:
     
     @modal.enter()
     def setup(self):
+        # MOCK PYAIRPORTS (Package deleted from PyPI but required by outlines)
+        import sys
+        from types import ModuleType
+        dummy = ModuleType("pyairports")
+        dummy.airports = ModuleType("pyairports.airports")
+        dummy.airports.AIRPORT_LIST = []
+        sys.modules["pyairports"] = dummy
+        sys.modules["pyairports.airports"] = dummy.airports
+        
         from vllm import LLM
         # Load 20B parameters model
         self.llm = LLM(MODEL_NAME, download_dir=MODEL_DIR, tensor_parallel_size=1)
@@ -55,10 +64,24 @@ class AkawaIntelligence:
                 max_tokens=req.max_tokens,
             )
             text_to_generate = req.prompt if req.prompt else req.input_text
+            
+            # Application logging
+            print(f"=== INCOMING GENERATE REQUEST ===")
+            print(f"Input Data: {req.input_text}")
+            print(f"Prompt: {req.prompt}")
+            print(f"Text to Generate: {text_to_generate}")
+            
             out = self.llm.generate([text_to_generate], sampling_params)
             generated_text = out[0].outputs[0].text
             ms = (time.time() - start) * 1000
             usage = len(out[0].outputs[0].token_ids)
+            
+            print(f"=== GENERATION OUTPUT ===")
+            print(f"Reasoning/Generated text: {generated_text.strip()}")
+            print(f"Tokens Used: {usage}")
+            print(f"Processing Time (ms): {ms:.2f}")
+            print(f"=================================\n")
+            
             return GenerateResponse(
                 report=generated_text.strip(),
                 tokens_used=usage,

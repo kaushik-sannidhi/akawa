@@ -6,11 +6,13 @@ import VideoPlayer from "@/components/VideoPlayer";
 import AlertSidebar from "@/components/AlertSidebar";
 import { getBaseUrl } from "@/lib/config";
 import { useSettings } from "@/context/SettingsContext";
+import { useTelemetry } from "@/context/TelemetryContext";
 import { auth } from "@/lib/firebase";
 import { Bell, X } from "lucide-react";
 import { analyzeVideoWithVLM } from "@/lib/vlmApi";
 
 const WEAPON_CLASSES = ["gun", "knife", "violence"];
+const WEAPON_ALERT_CONFIDENCE_THRESHOLD = 0.85;
 
 const mapClassToThreatType = (className: string): "weapon" | "violence" | "fall" => {
     const normalized = (className || "").toLowerCase();
@@ -39,6 +41,7 @@ export default function UploadAnalysisPage() {
     const [alerts, setAlerts] = useState<any[]>([]);
     const [alertsPanelOpen, setAlertsPanelOpen] = useState(false);
     const { confidenceThreshold, selectedModel } = useSettings();
+    const { logSysEvent } = useTelemetry();
 
     // Local override slider initialized from global settings
     const [localThreshold, setLocalThreshold] = useState<number>(confidenceThreshold);
@@ -224,14 +227,25 @@ export default function UploadAnalysisPage() {
     const handleNewAlerts = (detections: any[], timestamp: number) => {
         // Filter for weapon/threat classes above the threshold
         const newThreats = detections.filter(
-            (d) =>
-                (d.is_threat ||
-                    WEAPON_CLASSES.includes(d.class_name) ||
-                    ["weapon", "fall", "violent_person"].includes(d.detection_type)) &&
-                d.confidence >= localThreshold
+            (d) => {
+                const isWeapon = WEAPON_CLASSES.includes(d.class_name) || d.detection_type === "weapon" || d.class_name === "gun" || d.class_name === "knife";
+                const isViolence = d.class_name === "violence" || d.detection_type === "violent_person";
+                const isFall = d.detection_type === "fall";
+                // Weapons require high confidence; violence/fall use localThreshold
+                if (isWeapon) return d.confidence >= WEAPON_ALERT_CONFIDENCE_THRESHOLD;
+                return (isViolence || isFall || d.is_threat) && d.confidence >= localThreshold;
+            }
         );
 
         if (newThreats.length > 0) {
+            // Log to SYS.LOG so the dashboard shows live threat activity
+            newThreats.forEach((event) => {
+                const isWeapon = ["gun", "knife", "weapon"].includes(event.class_name) || event.detection_type === "weapon";
+                const isViolence = event.class_name === "violence" || event.detection_type === "violent_person";
+                const label = isWeapon ? "WEAPON" : isViolence ? "VIOLENCE" : (event.class_name || "THREAT").toUpperCase();
+                logSysEvent(`[WARN] ANOMALY DETECTED — ${label} @ ${timestamp.toFixed(1)}s [CONF: ${(event.confidence * 100).toFixed(0)}%]`);
+            });
+
             setAlerts((prev) => {
                 const updated = [...prev];
                 newThreats.forEach((event) => {

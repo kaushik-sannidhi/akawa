@@ -704,7 +704,7 @@ class FastVisionAPI:
                 )
 
         # ════════════════════════════════════════════════════════════════════
-        # PATH B — Single frame (WebSocket, no violence model)
+        # PATH B — Single frame
         # ════════════════════════════════════════════════════════════════════
         elif req.frame_b64:
             try:
@@ -722,27 +722,78 @@ class FastVisionAPI:
                         error="Invalid image data",
                     )
 
+                logger.info(f"[PATH B] Processing single frame for stream {stream_id}")
+
                 max_weapon_conf, _, weapon_detections, _ = \
                     self._scan_weapons([frame], *frame.shape[:2])
                 weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
 
+                logger.info(f"   -> Weapon Check: max_conf={max_weapon_conf:.3f} (threshold={WEAPON_ALERT_THRESH}) detected={weapons_detected}")
+
                 fall_detected, max_fall_conf, person_detections, fall_detections = \
                     self._run_pose(frame, state["tracker"])
+                
+                logger.info(f"   -> Fall Check: max_conf={max_fall_conf:.3f} detected={fall_detected}")
+                for i, d in enumerate(person_detections):
+                    logger.info(f"   -> Person {i}: conf={d.confidence:.3f} bbox={d.bbox}")
+
+                # ── Roll Frames for Brawl Model in Single-Frame Mode ──
+                IMG_SIZE, SEQ_LEN = (84, 84), 20
+                if "brawl_buffer" not in state:
+                    state["brawl_buffer"] = []
+                
+                resized = cv2.resize(frame, IMG_SIZE)
+                rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+                gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+                prev_gray = state.get("prev_gray")
+                
+                if prev_gray is None:
+                    flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+                else:
+                    flow = _compute_optical_flow(prev_gray, gray)
+                    flow = np.clip(flow / 20.0, -1.0, 1.0)
+                state["prev_gray"] = gray
+                
+                stacked = np.concatenate([rgb, flow], axis=-1)
+                state["brawl_buffer"].append(stacked)
+                
+                # Keep buffer capped at SEQ_LEN
+                if len(state["brawl_buffer"]) > SEQ_LEN:
+                    state["brawl_buffer"] = state["brawl_buffer"][-SEQ_LEN:]
+                
+                violence_detected = False
+                violence_confidence = 0.0
+                # Only run brawl model if we have enough frames
+                if len(state["brawl_buffer"]) >= 5: # Run even on partial buffers by padding
+                    pad_len = SEQ_LEN - len(state["brawl_buffer"])
+                    padded_buffer = [np.zeros((*IMG_SIZE, 5), dtype=np.float32)] * pad_len + state["brawl_buffer"]
+                    sequence = np.expand_dims(np.array(padded_buffer, dtype=np.float32), axis=0)
+                    raw_brawl_conf = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
+                    violence_detected = raw_brawl_conf > BRAWL_ALERT_THRESH
+                    violence_confidence = raw_brawl_conf
+                    logger.info(f"   -> Violence Check (Buffered): raw_conf={raw_brawl_conf:.3f} (thresh={BRAWL_ALERT_THRESH}) detected={violence_detected}")
 
                 if weapons_detected:
                     threat_type = "weapon"
                 elif fall_detected:
                     threat_type = "fall"
+                elif violence_detected:
+                    threat_type = "violence"
+                    # Upgrade persons to violent
+                    for d in person_detections:
+                        d.detection_type = "violent_person"
                 else:
                     threat_type = "none"
 
                 all_detections = person_detections + weapon_detections + fall_detections
 
+                logger.info(f"   => FINAL THREAT TYPE: {threat_type.upper()} with {len(all_detections)} detections")
+
                 return FastVisionResponse(
                     weapons_detected=weapons_detected,
                     weapon_confidence=max_weapon_conf,
-                    violence_detected=False,
-                    violence_confidence=0.0,
+                    violence_detected=violence_detected,
+                    violence_confidence=violence_confidence,
                     fall_detected=fall_detected,
                     fall_confidence=max_fall_conf,
                     threat_type=threat_type,
@@ -751,7 +802,9 @@ class FastVisionAPI:
                 )
 
             except Exception as e:
+                import traceback
                 traceback.print_exc()
+                logger.error(f"[PATH B ERROR] {str(e)}")
                 return FastVisionResponse(
                     weapons_detected=False, weapon_confidence=0.0,
                     violence_detected=False, violence_confidence=0.0,
@@ -891,10 +944,10 @@ class FastVisionAPI:
     def detect(self, req: FastVisionRequest) -> FastVisionResponse:
         """
         Lightweight single-frame detection endpoint.
-        Returns all bounding boxes (persons + weapons) for a single frame.
-        Does NOT run the brawl model or sequence logic.
+        Uses a rolling buffer to ensure the brawl model can still detect violence on a single-frame per request feed.
         """
-        import base64, cv2, numpy as np, traceback
+        import base64, cv2, numpy as np, traceback, logging
+        logger = logging.getLogger("fast_vision_detect")
         try:
             encoded = req.frame_b64
             if not encoded and req.frame_sequence_b64:
@@ -912,24 +965,77 @@ class FastVisionAPI:
             if frame is None:
                 return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, error="Invalid image data", detections=[])
 
+            stream_id = req.stream_id or "default"
+            logger.info(f"[DETECT API] Processing single frame for stream {stream_id}")
+
             # Scan weapons
             max_weapon_conf, _, weapon_detections, _ = self._scan_weapons([frame], *frame.shape[:2])
             weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
+            logger.info(f"   -> Weapon Check: max_conf={max_weapon_conf:.3f} (thresh={WEAPON_ALERT_THRESH}) detected={weapons_detected}")
 
             # Scan persons / pose
-            state = self._get_stream_state(req.stream_id or "default")
+            state = self._get_stream_state(stream_id)
             fall_detected, max_fall_conf, person_detections, fall_detections = self._run_pose(frame, state["tracker"])
+            logger.info(f"   -> Fall Check: max_conf={max_fall_conf:.3f} detected={fall_detected}")
+            for i, d in enumerate(person_detections):
+                logger.info(f"   -> Person {i}: conf={d.confidence:.3f} bbox={d.bbox}")
+
+            # ── Roll Frames for Brawl Model in Single-Frame Mode ──
+            IMG_SIZE, SEQ_LEN = (84, 84), 20
+            if "brawl_buffer" not in state:
+                state["brawl_buffer"] = []
+            
+            resized = cv2.resize(frame, IMG_SIZE)
+            rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+            prev_gray = state.get("prev_gray")
+            
+            if prev_gray is None:
+                flow = np.zeros((*IMG_SIZE, 2), dtype=np.float32)
+            else:
+                flow = _compute_optical_flow(prev_gray, gray)
+                flow = np.clip(flow / 20.0, -1.0, 1.0)
+            state["prev_gray"] = gray
+            
+            stacked = np.concatenate([rgb, flow], axis=-1)
+            state["brawl_buffer"].append(stacked)
+            
+            if len(state["brawl_buffer"]) > SEQ_LEN:
+                state["brawl_buffer"] = state["brawl_buffer"][-SEQ_LEN:]
+            
+            violence_detected = False
+            violence_confidence = 0.0
+            if len(state["brawl_buffer"]) >= 5:
+                pad_len = SEQ_LEN - len(state["brawl_buffer"])
+                padded_buffer = [np.zeros((*IMG_SIZE, 5), dtype=np.float32)] * pad_len + state["brawl_buffer"]
+                sequence = np.expand_dims(np.array(padded_buffer, dtype=np.float32), axis=0)
+                raw_brawl_conf = float(self.brawl_model.predict(sequence, verbose=0)[0][0])
+                violence_detected = raw_brawl_conf > BRAWL_ALERT_THRESH
+                violence_confidence = raw_brawl_conf
+                logger.info(f"   -> Violence Check (Buffered): raw_conf={raw_brawl_conf:.3f} (thresh={BRAWL_ALERT_THRESH}) detected={violence_detected}")
+
+            if weapons_detected:
+                threat_type = "weapon"
+            elif fall_detected:
+                threat_type = "fall"
+            elif violence_detected:
+                threat_type = "violence"
+                for d in person_detections:
+                    d.detection_type = "violent_person"
+            else:
+                threat_type = "none"
 
             all_detections = person_detections + weapon_detections + fall_detections
+            logger.info(f"   => FINAL THREAT TYPE: {threat_type.upper()} with {len(all_detections)} detections")
             
             return FastVisionResponse(
                 weapons_detected=weapons_detected,
                 weapon_confidence=max_weapon_conf,
-                violence_detected=False,
-                violence_confidence=0.0,
+                violence_detected=violence_detected,
+                violence_confidence=violence_confidence,
                 fall_detected=fall_detected,
                 fall_confidence=max_fall_conf,
-                threat_type="weapon" if weapons_detected else ("fall" if fall_detected else "none"),
+                threat_type=threat_type,
                 detections=all_detections,
                 per_frame_detections={0: all_detections}
             )
