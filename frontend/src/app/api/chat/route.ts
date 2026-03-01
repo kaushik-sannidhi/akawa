@@ -87,7 +87,7 @@ async function fetchRecentAlerts(): Promise<string> {
                             ).toISOString()
                             : "unknown";
                         entries.push(
-                            `- [${ts}] ${r.threat_type?.toUpperCase() || "THREAT"}: ${r.title || "Incident"} | Camera: ${r.camera_name || "N/A"} | Confidence: ${r.confidence ? Math.round(r.confidence * 100) + "%" : "N/A"} | AI Analysis: ${(r.vlm_summary || "").slice(0, 200)}`
+                            `- [${ts}] ${r.threat_type?.toUpperCase() || "THREAT"}: ${r.title || "Incident"} | Camera: ${r.camera_name || "N/A"} | Confidence: ${r.confidence ? Math.round(r.confidence * 100) + "%" : "N/A"} | AI Analysis: ${(r.vlm_summary || "").trim()}`
                         );
                     }
                 }
@@ -189,25 +189,24 @@ export async function POST(req: Request) {
         .join("\n\n");
 
     // Build the LLM prompt
-    const systemPrompt = `You are a precise, analytical forensic security copilot for the AKAWA CCTV surveillance platform.
+    const systemPrompt = `You are a friendly and helpful security assistant for the AKAWA surveillance system. You talk like a knowledgeable colleague — clear, calm, and conversational. Keep it natural.
 
-ROLE: Help security operators analyze threats detected in live and archived video feeds.
+CONTEXT — here is the latest data from our security system:
+${contextBlock || "No recent alerts in the system right now."}
 
-DATA SOURCES AVAILABLE TO YOU:
-${contextBlock || "No alert data currently available in the system."}
-
-INSTRUCTIONS:
-- Reference specific cameras, timestamps, threat types, and AI analysis when answering.
-- If you have alert data above, use it to answer the operator's questions.
-- If no data is available, say so clearly — do not fabricate incidents.
-- Be concise, professional, and operational. No emojis.
-- Focus on actionable security intelligence.`;
+HOW TO RESPOND:
+- STRICT FACTUAL ACCURACY: You must ONLY provide facts from the CONTEXT above. Do not hallucinate, guess, or make up any details. If the context doesn't have the answer, say you don't know.
+- FORMATTING: Talk naturally, like a helpful coworker briefing someone. Avoid tables, bullet-heavy lists, or overly formal language.
+- When mentioning incidents, ALWAYS include the exact time (e.g. "around 1:34 PM today") and camera ID naturally in the sentence.
+- Incorporate the VLM AI Analysis details to give rich context about exactly what happened.
+- Keep answers short and to the point — a few sentences is usually enough.
+- You can use bold for emphasis but keep formatting minimal.`;
 
     const conversationText = messages
-        .map((m: any) => `${m.role === "user" ? "OPERATOR" : "COPILOT"}: ${m.content}`)
+        .map((m: any) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
         .join("\n");
 
-    const fullPrompt = `${systemPrompt}\n\nCONVERSATION:\n${conversationText}\n\nCOPILOT:`;
+    const fullPrompt = `${systemPrompt}\n\n${conversationText}\n\nAssistant:`;
 
     // Call the Modal LLM with a timeout
     try {
@@ -215,11 +214,12 @@ INSTRUCTIONS:
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                prompt: fullPrompt,
                 input_text: fullPrompt,
-                max_tokens: 1024,
-                temperature: 0.3,
+                max_tokens: 512,
+                temperature: 0.7,
             }),
-            signal: AbortSignal.timeout(30000), // 30s timeout
+            signal: AbortSignal.timeout(120000), // 120s timeout for cold starts and large VLM context
         });
 
         if (!modalResp.ok) {

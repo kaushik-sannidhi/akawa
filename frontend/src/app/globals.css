@@ -290,6 +290,76 @@ body::after {
   }
 }
 
+/* Security Copilot – Markdown styles */
+.copilot-markdown p {
+  margin: 0.4em 0;
+  line-height: 1.5;
+}
+.copilot-markdown p:first-child { margin-top: 0; }
+.copilot-markdown p:last-child { margin-bottom: 0; }
+
+.copilot-markdown strong { color: #fff; font-weight: 700; }
+.copilot-markdown em { font-style: italic; }
+
+.copilot-markdown h1, .copilot-markdown h2, .copilot-markdown h3,
+.copilot-markdown h4 {
+  color: #fff;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+  font-size: 0.9em;
+}
+.copilot-markdown h1 { font-size: 1.05em; }
+
+.copilot-markdown ul, .copilot-markdown ol {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+.copilot-markdown li { margin: 0.15em 0; }
+.copilot-markdown li::marker { color: var(--color-alert); }
+
+.copilot-markdown code {
+  background: rgba(255,255,255,0.08);
+  padding: 0.15em 0.35em;
+  font-size: 0.88em;
+  font-family: var(--font-mono);
+}
+
+.copilot-markdown pre {
+  background: rgba(255,255,255,0.06);
+  padding: 0.6em;
+  overflow-x: auto;
+  margin: 0.4em 0;
+  font-size: 0.85em;
+}
+
+.copilot-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+}
+.copilot-markdown th, .copilot-markdown td {
+  border: 1px solid var(--color-iron);
+  padding: 0.3em 0.5em;
+  text-align: left;
+}
+.copilot-markdown th {
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+  font-weight: 700;
+}
+
+.copilot-markdown hr {
+  border: none;
+  border-top: 1px solid var(--color-iron);
+  margin: 0.6em 0;
+}
+
+.copilot-markdown a {
+  color: var(--color-alert);
+  text-decoration: underline;
+}
+
 /* Force override of any lingering Tailwind rounded utilities */
 * {
   border-radius: 0 !important;
