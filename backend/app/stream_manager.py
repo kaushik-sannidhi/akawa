@@ -40,6 +40,54 @@ def _is_fall_detection(d: dict) -> bool:
 def _is_violence_detection(d: dict) -> bool:
     return d.get("detection_type") == "violent_person"
 
+def _draw_detections(frame, detections: List[dict]):
+    """
+    Draw aesthetic bounding boxes on a cv2 frame.
+    Matches the frontend's visual style:
+    - Person: semi-transparent white/gray
+    - Weapon: thick red with glow
+    - Fall: orange
+    - Violence: purple
+    """
+    for d in detections:
+        bbox = d.get("bbox", {})
+        if not bbox: continue
+        
+        h, w = frame.shape[:2]
+        x1, y1 = int(bbox.get("x1", 0) * w), int(bbox.get("y1", 0) * h)
+        x2, y2 = int(bbox.get("x2", 1) * w), int(bbox.get("y2", 1) * h)
+        
+        det_type = d.get("detection_type", "person")
+        class_name = d.get("class_name", "unknown").upper()
+        conf = int(d.get("confidence", 0) * 100)
+        label = f"{class_name} {conf}%"
+        
+        # Color mapping (BGR)
+        colors = {
+            "person": (200, 200, 200),  # Light gray
+            "weapon": (0, 51, 255),     # Red
+            "fall": (0, 153, 255),      # Orange
+            "violent_person": (255, 51, 204), # Purple
+        }
+        color = colors.get(det_type, (200, 200, 200))
+        
+        thickness = 2
+        if det_type in THREAT_DETECTION_TYPES or det_type == "violent_person":
+            thickness = 3
+            # Add a subtle "glow" for threats
+            for i in range(1, 3):
+                glow_color = tuple(max(0, c - 50) for c in color)
+                cv2.rectangle(frame, (x1-i*2, y1-i*2), (x2+i*2, y2+i*2), glow_color, 1)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
+        
+        # Label background
+        (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(frame, (x1, y1 - th - 10), (x1 + tw + 10, y1), color, -1)
+        cv2.putText(frame, label, (x1 + 5, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    return frame
+
 
 class Stream:
     def __init__(self, name: str, stream_type: str, source: str, uid: str,
@@ -300,9 +348,10 @@ class StreamManager:
                 latency_ms = int((time.time() - t0) * 1000)
 
                 # result is the full FastVisionResponse dict from the new API
-                detections   = result.get("detections") or []
-                threat_type  = result.get("threat_type", "none")
-                has_threat   = threat_type != "none"
+                detections           = result.get("detections") or []
+                per_frame_detections = result.get("per_frame_detections") or {}
+                threat_type          = result.get("threat_type", "none")
+                has_threat           = threat_type != "none"
 
                 stream.latest_detections  = detections
                 stream.latest_threat_type = threat_type
@@ -318,11 +367,16 @@ class StreamManager:
                         f"NODE_WS_{stream.id[:6]}", stream.uid)
                     await self._handle_threat(stream, frames[-1], result)
 
-                self._track_alert_window(stream, has_threat, frames[-1])
+                # Draw detections on the frame before tracking for alert clips
+                # so the boxes are "burnt in" to the recorded clip.
+                draw_frame = frames[-1].copy()
+                _draw_detections(draw_frame, detections)
+                self._track_alert_window(stream, has_threat, draw_frame)
 
                 det_payload = json.dumps({
                     "type": "detections",
                     "detections": detections,
+                    "per_frame_detections": per_frame_detections,
                     "threat_type": threat_type,
                     # Pass through model confidence values for frontend debug overlay
                     "weapon_confidence": result.get("weapon_confidence", 0.0),
@@ -402,7 +456,11 @@ class StreamManager:
             os.makedirs(uid_dir, exist_ok=True)
             image_name = f"{event_id}.jpg"
             image_path = os.path.join(uid_dir, image_name)
-            cv2.imwrite(image_path, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            
+            # Draw boxes on the frame before saving
+            draw_frame = frame.copy()
+            _draw_detections(draw_frame, detections)
+            cv2.imwrite(image_path, draw_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
 
             event = {
                 "id": event_id,

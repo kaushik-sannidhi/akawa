@@ -277,6 +277,9 @@ class FastVisionResponse(BaseModel):
     # Per-frame bounding boxes (always populated — persons even when no threat)
     detections: Optional[List[Detection]] = None
 
+    # New: Grouped detections per frame index (0 to SEQUENCE_LENGTH-1)
+    per_frame_detections: Optional[Dict[int, List[Detection]]] = None
+
     # Raw brawl model output (useful for debugging thresholds)
     raw_brawl_confidence: Optional[float] = None
 
@@ -395,9 +398,10 @@ class FastVisionAPI:
     def _scan_weapons(self, frames, frame_height: int, frame_width: int):
         """
         Run weapon YOLO on every other frame.
-        Returns (max_weapon_conf, weapon_hit_ratio, weapon_detections[]).
+        Returns (max_weapon_conf, weapon_hit_ratio, weapon_detections[], per_frame_weapon_dets).
         weapon_detections contains normalised Detection objects for the frames
         where a weapon was found.
+        per_frame_weapon_dets is a dict {frame_idx: [Detection]}
         """
         import numpy as np
 
@@ -408,6 +412,7 @@ class FastVisionAPI:
 
         weapon_confidences = []
         weapon_detections  = []
+        per_frame_weapon_dets = {}
         scanned = 0
 
         for i, frame in enumerate(frames):
@@ -416,6 +421,7 @@ class FastVisionAPI:
             scanned += 1
             h, w = frame.shape[:2]
             results = self.weapon_model(frame, verbose=False)
+            frame_dets = []
             for r in results:
                 for j in range(len(r.boxes)):
                     cls_id    = int(r.boxes.cls[j].item())
@@ -438,16 +444,21 @@ class FastVisionAPI:
                         raw = r.boxes.xyxy[j].tolist()
                         xyxyn = [raw[0]/w, raw[1]/h, raw[2]/w, raw[3]/h]
 
-                    weapon_detections.append(Detection(
+                    det = Detection(
                         bbox=xyxyn,
                         confidence=conf,
                         class_name=class_name,
                         detection_type="weapon",
-                    ))
+                    )
+                    weapon_detections.append(det)
+                    frame_dets.append(det)
+            
+            if frame_dets:
+                per_frame_weapon_dets[i] = frame_dets
 
         max_conf  = max(weapon_confidences) if weapon_confidences else 0.0
         hit_ratio = len(weapon_confidences) / max(scanned, 1)
-        return max_conf, hit_ratio, weapon_detections
+        return max_conf, hit_ratio, weapon_detections, per_frame_weapon_dets
 
     # ── Shared pose / fall / person bbox extraction ──────────────────────────
     def _run_pose(self, frame, tracker: EventTracker):
@@ -562,15 +573,34 @@ class FastVisionAPI:
                 # If weapon found in ≥WEAPON_DOMINANCE_RATIO of those samples
                 # we skip the brawl model entirely — fast motion from wielding
                 # a weapon is indistinguishable from a brawl to the CNN.
-                max_weapon_conf, weapon_hit_ratio, weapon_detections = \
+                max_weapon_conf, weapon_hit_ratio, weapon_detections, per_frame_weapon_dets = \
                     self._scan_weapons(frames, *frames[0].shape[:2])
 
                 weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
                 weapon_dominant  = weapon_hit_ratio >= WEAPON_DOMINANCE_RATIO
 
-                # ── 3. Pose / fall / person bboxes on last frame ─────────
-                fall_detected, max_fall_conf, person_detections, fall_detections = \
-                    self._run_pose(frames[-1], state["tracker"])
+                # ── 3. Pose / fall / person bboxes ───────────────────────
+                # Run on multiple frames for better display
+                per_frame_pose_dets = {}
+                fall_detected = False
+                max_fall_conf = 0.0
+                all_person_dets = []
+                all_fall_dets = []
+
+                # Run pose on every 5th frame + the last frame
+                pose_indices = list(range(0, len(frames), 5))
+                if (len(frames) - 1) not in pose_indices:
+                    pose_indices.append(len(frames) - 1)
+
+                for idx in pose_indices:
+                    f_det, f_conf, p_dets, fall_dets = self._run_pose(frames[idx], state["tracker"])
+                    if f_det:
+                        fall_detected = True
+                        max_fall_conf = max(max_fall_conf, f_conf)
+                    
+                    all_person_dets.extend(p_dets)
+                    all_fall_dets.extend(fall_dets)
+                    per_frame_pose_dets[idx] = p_dets + fall_dets
 
                 # ── 4. Brawl model — only when weapon is NOT dominant ────
                 #
@@ -622,15 +652,24 @@ class FastVisionAPI:
                 last_resized       = cv2.resize(frames[-1], IMG_SIZE)
                 state["prev_gray"] = cv2.cvtColor(last_resized, cv2.COLOR_BGR2GRAY)
 
-                # ── 5. Threat priority ────────────────────────────────────
+                # ── 5. Merge per-frame detections ─────────────────────────
+                per_frame_detections = {}
+                all_indices = set(per_frame_weapon_dets.keys()) | set(per_frame_pose_dets.keys())
+                for idx in all_indices:
+                    per_frame_detections[idx] = per_frame_weapon_dets.get(idx, []) + per_frame_pose_dets.get(idx, [])
+
+                # ── 6. Threat priority ────────────────────────────────────
                 weapons_detected = (max_weapon_conf >= WEAPON_ALERT_THRESH) and weapon_dominant
 
                 # Always upgrade person markers if violence is active
                 if violence_detected:
-                    for d in person_detections:
+                    for d in all_person_dets:
                         d.detection_type = "violent_person"
+                    for frame_dets in per_frame_detections.values():
+                        for d in frame_dets:
+                            if d.detection_type == "person":
+                                d.detection_type = "violent_person"
 
-                # ── 5. Threat priority ────────────────────────────────────
                 # weapon > fall > violence > none
                 if weapons_detected:
                     threat_type = "weapon"
@@ -641,16 +680,7 @@ class FastVisionAPI:
                 else:
                     threat_type = "none"
 
-                all_detections = person_detections + weapon_detections + fall_detections
-
-                if threat_type != "none":
-                    logger.info(
-                        f"[FastVision] ALERT stream={stream_id} "
-                        f"threat={threat_type} "
-                        f"weapon={max_weapon_conf:.2f}(ratio={weapon_hit_ratio:.2f}) "
-                        f"brawl={raw_brawl_conf} "
-                        f"fall={max_fall_conf:.2f}"
-                    )
+                all_detections = all_person_dets + weapon_detections + all_fall_dets
 
                 return FastVisionResponse(
                     weapons_detected=weapons_detected,
@@ -661,6 +691,7 @@ class FastVisionAPI:
                     fall_confidence=max_fall_conf,
                     threat_type=threat_type,
                     detections=all_detections,
+                    per_frame_detections=per_frame_detections,
                     raw_brawl_confidence=raw_brawl_conf,
                 )
 
@@ -691,7 +722,7 @@ class FastVisionAPI:
                         error="Invalid image data",
                     )
 
-                max_weapon_conf, _, weapon_detections = \
+                max_weapon_conf, _, weapon_detections, _ = \
                     self._scan_weapons([frame], *frame.shape[:2])
                 weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
 
@@ -716,6 +747,7 @@ class FastVisionAPI:
                     fall_confidence=max_fall_conf,
                     threat_type=threat_type,
                     detections=all_detections,
+                    per_frame_detections={0: all_detections},
                 )
 
             except Exception as e:
@@ -751,7 +783,6 @@ class FastVisionAPI:
                 frame_count        = 0
 
                 upload_tracker = EventTracker(max_age=10)
-
                 while True:
                     ret, frame = cap.read()
                     if not ret: break
@@ -759,7 +790,7 @@ class FastVisionAPI:
 
                     # Weapon + pose every 5th frame
                     if frame_count % 5 == 0:
-                        _, _, w_dets = self._scan_weapons([frame], *frame.shape[:2])
+                        _, _, w_dets, _ = self._scan_weapons([frame], *frame.shape[:2])
                         for d in w_dets:
                             weapon_confidences.append(d.confidence)
                             all_weapon_dets.append(d)
@@ -855,3 +886,53 @@ class FastVisionAPI:
             violence_detected=False, violence_confidence=0.0,
             error="No input provided (frame_b64, frame_sequence_b64, or video_b64 required)",
         )
+
+    @modal.fastapi_endpoint(method="POST", docs=True)
+    def detect(self, req: FastVisionRequest) -> FastVisionResponse:
+        """
+        Lightweight single-frame detection endpoint.
+        Returns all bounding boxes (persons + weapons) for a single frame.
+        Does NOT run the brawl model or sequence logic.
+        """
+        import base64, cv2, numpy as np, traceback
+        try:
+            encoded = req.frame_b64
+            if not encoded and req.frame_sequence_b64:
+                encoded = req.frame_sequence_b64[-1]
+            
+            if not encoded:
+                return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, error="No frame provided", detections=[])
+
+            if "," in encoded:
+                encoded = encoded.split(",", 1)[1]
+            img_data = base64.b64decode(encoded)
+            nparr    = np.frombuffer(img_data, np.uint8)
+            frame    = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+            if frame is None:
+                return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, error="Invalid image data", detections=[])
+
+            # Scan weapons
+            max_weapon_conf, _, weapon_detections, _ = self._scan_weapons([frame], *frame.shape[:2])
+            weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
+
+            # Scan persons / pose
+            state = self._get_stream_state(req.stream_id or "default")
+            fall_detected, max_fall_conf, person_detections, fall_detections = self._run_pose(frame, state["tracker"])
+
+            all_detections = person_detections + weapon_detections + fall_detections
+            
+            return FastVisionResponse(
+                weapons_detected=weapons_detected,
+                weapon_confidence=max_weapon_conf,
+                violence_detected=False,
+                violence_confidence=0.0,
+                fall_detected=fall_detected,
+                fall_confidence=max_fall_conf,
+                threat_type="weapon" if weapons_detected else ("fall" if fall_detected else "none"),
+                detections=all_detections,
+                per_frame_detections={0: all_detections}
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return FastVisionResponse(weapons_detected=False, weapon_confidence=0.0, error=str(e), detections=[])

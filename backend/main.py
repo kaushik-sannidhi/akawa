@@ -182,12 +182,19 @@ def _parse_fast_vision_response(data: dict) -> Dict[str, Any]:
       - fall_confidence:    float
     """
     detections = [_format_detection(d) for d in (data.get("detections") or [])]
+    per_frame_raw = data.get("per_frame_detections") or {}
+    per_frame_formatted = {
+        idx: [_format_detection(d) for d in dets]
+        for idx, dets in per_frame_raw.items()
+    }
+
     return {
-        "detections":          detections,
-        "threat_type":         data.get("threat_type", "none"),
-        "weapon_confidence":   data.get("weapon_confidence", 0.0),
-        "violence_confidence": data.get("violence_confidence", 0.0),
-        "fall_confidence":     data.get("fall_confidence", 0.0),
+        "detections":           detections,
+        "per_frame_detections": per_frame_formatted,
+        "threat_type":          data.get("threat_type", "none"),
+        "weapon_confidence":    data.get("weapon_confidence", 0.0),
+        "violence_confidence":  data.get("violence_confidence", 0.0),
+        "fall_confidence":      data.get("fall_confidence", 0.0),
         "raw_brawl_confidence": data.get("raw_brawl_confidence"),
     }
 
@@ -411,17 +418,27 @@ async def proxy_audio_detect(req: AudioRequest, stream_id: str = None):
         return {"error": str(e)}
 
 
-@app.post("/api/audio/analyze")
-async def proxy_audio_analyze(req: AudioRequest):
-    """Proxy to Qwen2-Audio for deep acoustic LLM analysis."""
+class FastVisionRequest(BaseModel):
+    frame_b64: str
+    video_name: Optional[str] = "live_stream"
+    source_type: Optional[str] = "live"
+    stream_id: Optional[str] = "default"
+
+
+@app.post("/api/detect")
+async def proxy_fast_vision_detect(req: FastVisionRequest):
+    """
+    Proxy to the lightweight single-frame detection endpoint.
+    """
     try:
-        resp = requests.post(
-            AUDIO_ANALYZE_URL,
-            json={"audio_b64": req.audio_b64, "prompt": req.prompt},
-            timeout=30,
-        )
-        return resp.json() if resp.status_code == 200 else {"error": resp.text}
+        url = FAST_VISION_URL.replace("/analyze", "/detect")
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=req.dict())
+            resp.raise_for_status()
+            data = resp.json()
+            return _parse_fast_vision_response(data)
     except Exception as e:
+        traceback.print_exc()
         return {"error": str(e)}
 
 
