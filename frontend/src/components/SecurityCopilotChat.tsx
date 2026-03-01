@@ -1,15 +1,19 @@
 "use client";
 
-import { useChat } from '@ai-sdk/react';
 import { Terminal, Send, X, RefreshCw } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-// AI SDK 3.0+
+interface Message {
+    role: "user" | "assistant";
+    content: string;
+}
 
 export default function SecurityCopilotChat() {
     const [isOpen, setIsOpen] = useState(false);
-    const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat() as any;
+    const [input, setInput] = useState("");
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [isLoading, setIsLoading] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
 
     // Auto-scroll to bottom on new messages
@@ -18,6 +22,79 @@ export default function SecurityCopilotChat() {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [messages]);
+
+    const handleSubmit = useCallback(async (e?: React.FormEvent) => {
+        e?.preventDefault();
+        const trimmed = (input || "").trim();
+        if (!trimmed || isLoading) return;
+
+        const userMessage: Message = { role: "user", content: trimmed };
+        const updatedMessages = [...messages, userMessage];
+
+        setMessages(updatedMessages);
+        setInput("");
+        setIsLoading(true);
+
+        try {
+            const res = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ messages: updatedMessages }),
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                const errText = errData.error || `HTTP ${res.status}`;
+                setMessages(prev => [...prev, {
+                    role: "assistant",
+                    content: `[SYSTEM ERROR] ${errText}`
+                }]);
+                return;
+            }
+
+            const contentType = res.headers.get("content-type") || "";
+
+            if (contentType.includes("text/plain") || contentType.includes("text/event-stream")) {
+                // Streaming response
+                const reader = res.body?.getReader();
+                const decoder = new TextDecoder();
+                let accumulated = "";
+
+                setMessages(prev => [...prev, { role: "assistant", content: "" }]);
+
+                if (reader) {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        accumulated += decoder.decode(value, { stream: true });
+                        setMessages(prev => {
+                            const updated = [...prev];
+                            updated[updated.length - 1] = {
+                                role: "assistant",
+                                content: accumulated
+                            };
+                            return updated;
+                        });
+                    }
+                }
+            } else {
+                // JSON response
+                const data = await res.json();
+                const responseText = data.content || data.text || data.response || data.output || "[NO RESPONSE]";
+                setMessages(prev => [...prev, {
+                    role: "assistant",
+                    content: responseText
+                }]);
+            }
+        } catch (err: any) {
+            setMessages(prev => [...prev, {
+                role: "assistant",
+                content: `[COMM ERROR] ${err.message || "Failed to reach copilot backend."}`
+            }]);
+        } finally {
+            setIsLoading(false);
+        }
+    }, [input, messages, isLoading]);
 
     return (
         <AnimatePresence>
@@ -60,11 +137,11 @@ export default function SecurityCopilotChat() {
                                 <div className="absolute inset-0 flex flex-col items-center justify-center opacity-30 pointer-events-none select-none p-8 text-center">
                                     <Terminal className="w-16 h-16 mb-4 text-[var(--color-data)]" />
                                     <p className="text-sm font-bold">STATE: ANALYTICAL_CORE_READY</p>
-                                    <p className="text-[10px] mt-2 text-[var(--color-silica)]">COPILOT_GPT4o_ONLINE</p>
+                                    <p className="text-[10px] mt-2 text-[var(--color-silica)]">MODAL_LLM + SUPERMEMORY_ONLINE</p>
                                 </div>
                             )}
 
-                            {messages.map((m: any, idx: number) => (
+                            {messages.map((m, idx) => (
                                 <div key={idx} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
                                     <div className="text-[9px] text-[var(--color-silica)] mb-1 uppercase">
                                         [{m.role === 'user' ? 'OPERATOR' : 'SEC_COPILOT'}]
@@ -92,13 +169,13 @@ export default function SecurityCopilotChat() {
                                 <input
                                     type="text"
                                     value={input}
-                                    onChange={handleInputChange}
+                                    onChange={(e) => setInput(e.target.value)}
                                     placeholder="Enter forensic query..."
                                     className="flex-1 bg-[var(--color-void)] border-2 border-[var(--color-iron)] text-white p-3 pl-8 text-sm focus:outline-none focus:border-[var(--color-alert)] transition-colors placeholder:text-[var(--color-iron)] font-mono"
                                 />
                                 <button
                                     type="submit"
-                                    disabled={isLoading || !input.trim()}
+                                    disabled={isLoading || !(input || "").trim()}
                                     className="px-4 bg-[var(--color-alert)] text-black border-2 border-transparent hover:bg-black hover:text-[var(--color-alert)] hover:border-[var(--color-alert)] font-bold transition-none disabled:opacity-50"
                                 >
                                     <Send className="w-5 h-5" />
