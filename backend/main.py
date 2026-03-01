@@ -2,6 +2,7 @@ import os
 import uuid
 import cv2
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,8 +32,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app):
     print("[STARTUP] Restoring streams from Firebase...")
     _restore_streams_from_firebase()
+    
+    from app.picows_server import start_picows_server
+    import asyncio
+    print("[STARTUP] Starting picows WebSocket server on port 9001...")
+    picows_task = asyncio.create_task(start_picows_server(host="0.0.0.0", port=9001))
+    
     print("[STARTUP] Ready.")
     yield
+    picows_task.cancel()
 
 
 app = FastAPI(title="Akawa Detection API", lifespan=lifespan)
@@ -47,7 +55,7 @@ default_origins = [
     "https://www.itsakawa.tech",
     "https://akawa.vercel.app",
     "https://akawa.onrender.com",
-    "https://back.itsakawa.tech",
+    "https://server.itsakawa.tech",
     "https://server.itsakawa.tech"
 ]
 
@@ -138,7 +146,6 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     device_id=st_data.get("device_id", ""),
                     stream_id=st_id,
                     skip_ai=(st_data.get("type") == "client_cam"),
-                    cf_meeting_id=st_data.get("cf_meeting_id", ""),
                 )
                 print(f"[RESTORE] {st_id} ({st_data.get('type')}) for {user_uid}")
     except Exception as exc:
@@ -217,7 +224,7 @@ def _parse_fast_vision_response(data: dict) -> Dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def proxy_fast_vision_sequence(
-    frames: List[np.ndarray],
+    frame_pairs: List[tuple],
     stream_id: str = "default",
     video_name: str = "live_stream",
     source_type: str = "live",
@@ -227,15 +234,21 @@ def proxy_fast_vision_sequence(
     frame_sequence_b64 endpoint.  Called by stream_manager._ai_loop via
     asyncio.to_thread so it must be synchronous.
 
+    frame_pairs: List of (cv2_frame, jpeg_bytes_or_none)
     Returns a normalised result dict from _parse_fast_vision_response.
     """
     empty = _parse_fast_vision_response({})
     try:
         encoded = []
-        for f in frames:
-            ret, buf = cv2.imencode(".jpg", f, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
-            if ret:
-                encoded.append(base64.b64encode(buf).decode("utf-8"))
+        for frame, jpeg_bytes in frame_pairs:
+            if jpeg_bytes:
+                # Reuse pre-encoded bytes if available
+                encoded.append(base64.b64encode(jpeg_bytes).decode("utf-8"))
+            else:
+                # Fallback to encoding
+                ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+                if ret:
+                    encoded.append(base64.b64encode(buf).decode("utf-8"))
 
         if len(encoded) < 2:
             return empty
@@ -993,34 +1006,6 @@ async def list_streams(uid: str = "anonymous"):
 
 @app.post("/api/streams")
 async def create_stream(req: StreamCreateRequest):
-    cf_meeting_id = ""
-    if req.stream_type == "client_cam":
-        try:
-            from app.cloudflare_realtime import create_meeting, is_configured
-
-            if not is_configured():
-                raise HTTPException(
-                    status_code=503,
-                    detail="Cloudflare Realtime is not configured on backend.",
-                )
-
-            meeting = create_meeting(title=req.name)
-            if meeting:
-                cf_meeting_id = meeting["meeting_id"]
-            if not cf_meeting_id:
-                raise HTTPException(
-                    status_code=502,
-                    detail="Failed to provision a Cloudflare Realtime meeting.",
-                )
-        except Exception as e:
-            logger.error(f"[API] CF meeting provisioning failed: {e}")
-            if isinstance(e, HTTPException):
-                raise
-            raise HTTPException(
-                status_code=502,
-                detail="Cloudflare Realtime meeting provisioning failed.",
-            )
-
     stream = stream_manager.add_stream(
         name=req.name,
         stream_type=req.stream_type,
@@ -1028,7 +1013,6 @@ async def create_stream(req: StreamCreateRequest):
         uid=req.uid,
         model_id=req.model_id,
         device_id=req.device_id,
-        cf_meeting_id=cf_meeting_id,
     )
     try:
         import datetime
@@ -1038,7 +1022,6 @@ async def create_stream(req: StreamCreateRequest):
                 "name": req.name, "type": req.stream_type, "source": req.source,
                 "uid": req.uid, "model_id": req.model_id, "device_id": req.device_id,
                 "created_at": datetime.datetime.now().isoformat(),
-                "cf_meeting_id": cf_meeting_id,
             },
         )
     except Exception as e:
@@ -1079,156 +1062,7 @@ async def delete_stream(stream_id: str, uid: str = "anonymous"):
     return {"status": "success"}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# WebSocket — camera input (frames from device → AI pipeline)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@app.websocket("/ws/stream_in/{stream_id}")
-async def websocket_stream_in(websocket: WebSocket, stream_id: str):
-    """
-    Receives binary JPEG frames from the camera provider.
-    Decodes each frame and pushes it into stream._frame_buffer so the
-    AI loop can collect SEQUENCE_LENGTH frames and call the sequence API.
-    """
-    import asyncio as _aio
-
-    await websocket.accept()
-    stream = stream_manager.get_stream(stream_id)
-    if not stream or stream.type != "client_cam":
-        await websocket.close(code=1008)
-        return
-
-    logger.info(f"[WS IN] Camera provider connected on stream {stream_id}")
-    await stream_manager.activate_stream(stream)
-
-    def _decode_jpeg(jpeg_bytes: bytes):
-        np_arr = np.frombuffer(jpeg_bytes, np.uint8)
-        return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-
-    try:
-        while stream._running:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                break
-
-            jpeg_bytes = message.get("bytes")
-            if not jpeg_bytes:
-                continue
-
-            # Store latest b64 for legacy viewer broadcast
-            stream.latest_frame_b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
-
-            # Decode and push into sequence buffer — this is what triggers inference
-            async def _bg(data: bytes):
-                frame = await _aio.to_thread(_decode_jpeg, data)
-                if frame is not None:
-                    stream.latest_frame_cv2 = frame
-                    stream.push_frame(frame)   # ← feeds the AI loop batch buffer
-
-            _aio.create_task(_bg(jpeg_bytes))
-
-    except WebSocketDisconnect:
-        logger.info(f"[WS IN] Camera provider disconnected from stream {stream_id}")
-    except Exception as e:
-        logger.error(f"[WS IN] Error on stream {stream_id}: {e}")
-    finally:
-        if stream_manager.get_stream(stream_id):
-            await stream_manager.deactivate_stream(stream)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# WebSocket — viewer output (frames + detections)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@app.websocket("/ws/stream_out/{stream_id}")
-async def websocket_stream_out(websocket: WebSocket, stream_id: str):
-    """Legacy viewer endpoint — frame + detection JSON relay."""
-    await websocket.accept()
-    stream = stream_manager.get_stream(stream_id)
-    if not stream:
-        await websocket.close(code=1008)
-        return
-    await stream_manager.activate_stream(stream)
-    stream.viewer_wss.add(websocket)
-    try:
-        while stream._running and stream_manager.get_stream(stream_id):
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                break
-    except (WebSocketDisconnect, Exception):
-        pass
-    finally:
-        stream.viewer_wss.discard(websocket)
-        await stream_manager.deactivate_stream(stream)
-
-
-@app.websocket("/ws/detections/{stream_id}")
-async def websocket_detections(websocket: WebSocket, stream_id: str):
-    """Detection-only WebSocket for Cloudflare Calls SFU viewers."""
-    await websocket.accept()
-    stream = stream_manager.get_stream(stream_id)
-    if not stream:
-        await websocket.close(code=1008)
-        return
-    await stream_manager.activate_stream(stream)
-    stream.detection_wss.add(websocket)
-    try:
-        while stream._running and stream_manager.get_stream(stream_id):
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                break
-            if message.get("text") == "ping":
-                try: await websocket.send_text("pong")
-                except Exception: break
-    except (WebSocketDisconnect, Exception):
-        pass
-    finally:
-        stream.detection_wss.discard(websocket)
-        await stream_manager.deactivate_stream(stream)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Cloudflare Realtime Kit
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class RealtimeJoinRequest(BaseModel):
-    stream_id: str
-    participant_name: str = "viewer"
-    device_id: str = ""
-    role: str = "viewer"   # "publisher" | "viewer"
-
-
-@app.post("/api/realtime/join")
-async def realtime_join(req: RealtimeJoinRequest):
-    stream = stream_manager.get_stream(req.stream_id)
-    if not stream or not stream.cf_meeting_id:
-        raise HTTPException(status_code=404, detail="Stream not found or Realtime meeting is missing.")
-
-    from app.cloudflare_realtime import add_participant, is_configured
-    if not is_configured():
-        raise HTTPException(status_code=503, detail="Cloudflare Realtime is not configured.")
-    pid    = req.device_id or f"anon-{uuid.uuid4().hex[:12]}"
-    result = add_participant(
-        meeting_id=stream.cf_meeting_id,
-        participant_id=pid,
-        name=req.participant_name,
-        role=req.role,          # ← "publisher" or "viewer", not hardcoded preset
-    )
-    if not result:
-        return {"error": "Failed to add participant"}
-
-    return {
-        "auth_token":     result["token"],
-        "participant_id": result["participant_id"],
-        "meeting_id":     stream.cf_meeting_id,
-        "role":           result["role"],
-    }
-
-
-@app.get("/api/turn-credentials")
-def get_turn_credentials():
-    from app.cloudflare_realtime import get_turn_credentials
-    return get_turn_credentials()
+# Removed legacy Fastapi WebSockets & Cloudflare Realtime Kit endpoints
 
 
 
