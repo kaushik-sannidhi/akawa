@@ -39,7 +39,7 @@
     "eslint-config-next": "16.1.6",
     "shadcn": "^3.8.5",
     "tailwindcss": "^4",
-    "typescript": "5.9.3",
+    "typescript": "^5",
     "vercel": "^50.25.4"
   }
 }
