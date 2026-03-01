@@ -128,9 +128,6 @@ def _restore_streams_from_firebase(uid_filter: str | None = None):
                     stream_id=st_id,
                     skip_ai=(st_data.get("type") == "client_cam"),
                     cf_meeting_id=st_data.get("cf_meeting_id", ""),
-                    calls_session_id=st_data.get("calls_session_id", ""),
-                    whip_url=st_data.get("whip_url", ""),
-                    whep_url=st_data.get("whep_url", ""),
                 )
                 print(f"[RESTORE] {st_id} ({st_data.get('type')}) for {user_uid}")
     except Exception as exc:
@@ -805,33 +802,14 @@ async def list_streams(uid: str = "anonymous"):
 @app.post("/api/streams")
 async def create_stream(req: StreamCreateRequest):
     cf_meeting_id = ""
-    calls_session_id = ""
-    whip_url = ""
-    whep_url = ""
-
     if req.stream_type == "client_cam":
-        # Try Cloudflare Calls (WHIP/WHEP) first for ultra-low latency
         try:
-            from app.cloudflare_realtime import create_calls_session, is_calls_configured
-            if is_calls_configured():
-                session = create_calls_session()
-                if session:
-                    calls_session_id = session["session_id"]
-                    whip_url = session["whip_url"]
-                    whep_url = session["whep_url"]
-                    logger.info(f"[API] Created Cloudflare Calls session {calls_session_id} for stream {req.name}")
+            from app.cloudflare_realtime import create_meeting
+            meeting = create_meeting(title=req.name)
+            if meeting:
+                cf_meeting_id = meeting["meeting_id"]
         except Exception as e:
-            logger.error(f"[API] CF Calls session provisioning failed: {e}")
-
-        # Fallback: RTK meeting for SDK-based approach
-        if not calls_session_id:
-            try:
-                from app.cloudflare_realtime import create_meeting
-                meeting = create_meeting(title=req.name)
-                if meeting:
-                    cf_meeting_id = meeting["meeting_id"]
-            except Exception as e:
-                logger.error(f"[API] CF meeting provisioning failed: {e}")
+            logger.error(f"[API] CF meeting provisioning failed: {e}")
 
     stream = stream_manager.add_stream(
         name=req.name,
@@ -841,9 +819,6 @@ async def create_stream(req: StreamCreateRequest):
         model_id=req.model_id,
         device_id=req.device_id,
         cf_meeting_id=cf_meeting_id,
-        calls_session_id=calls_session_id,
-        whip_url=whip_url,
-        whep_url=whep_url,
     )
     try:
         import datetime
@@ -854,9 +829,6 @@ async def create_stream(req: StreamCreateRequest):
                 "uid": req.uid, "model_id": req.model_id, "device_id": req.device_id,
                 "created_at": datetime.datetime.now().isoformat(),
                 "cf_meeting_id": cf_meeting_id,
-                "calls_session_id": calls_session_id,
-                "whip_url": whip_url,
-                "whep_url": whep_url,
             },
         )
     except Exception as e:
@@ -1046,293 +1018,6 @@ def get_turn_credentials():
     from app.cloudflare_realtime import get_turn_credentials
     return get_turn_credentials()
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Cloudflare Calls — WHIP/WHEP proxy (ultra-low latency live streaming)
-# The browser cannot send directly to Cloudflare Calls because the App Secret
-# must stay server-side. This proxy forwards the SDP offer/answer exchange.
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class WHIPSdpRequest(BaseModel):
-    stream_id: str
-    sdp: str
-    track_names: Optional[List[str]] = None   # ["video", "audio"]
-
-
-@app.post("/api/calls/whip")
-async def calls_whip_publish(req: WHIPSdpRequest):
-    """
-    WHIP publisher proxy — forwards browser SDP offer to Cloudflare Calls.
-    Returns the SDP answer so the browser can complete ICE negotiation.
-    This keeps the CF_CALLS_APP_SECRET server-side.
-    """
-    stream = stream_manager.get_stream(req.stream_id)
-    if not stream:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    if not stream.calls_session_id:
-        raise HTTPException(status_code=400, detail="Stream has no Cloudflare Calls session")
-
-    from app.cloudflare_realtime import _calls_base, _calls_headers
-    try:
-        e_calls_base = _calls_base()
-        e_headers = _calls_headers()
-        session_id = stream.calls_session_id
-
-        # Parse mid values from the SDP offer
-        # The SDP will have lines like "a=mid:0" or "a=mid:video"
-        # Cloudflare Calls needs these to map tracks correctly
-        sdp_lines = req.sdp.split("\n")
-        mid_values = []
-        for line in sdp_lines:
-            line = line.strip()
-            if line.startswith("a=mid:"):
-                mid_values.append(line[6:].strip())
-
-        # Build track list from parsed mids, or fall back to track_names
-        track_names = req.track_names or ["video", "audio"]
-        if not mid_values:
-            mid_values = track_names
-
-        payload: dict = {
-            "sessionDescription": {
-                "type": "offer",
-                "sdp": req.sdp,
-            },
-            "tracks": [],
-        }
-        for i, mid in enumerate(mid_values):
-            # Determine the track kind from track_names ordering or default
-            kind = track_names[i] if i < len(track_names) else ("video" if i == 0 else "audio")
-            payload["tracks"].append({
-                "location": "local",
-                "mid": mid,
-                "trackName": kind,
-            })
-
-        resp = requests.post(
-            f"{e_calls_base}/sessions/{session_id}/tracks/new",
-            json=payload,
-            headers=e_headers,
-            timeout=15,
-        )
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            answer_sdp = (data.get("sessionDescription") or {}).get("sdp", "")
-            tracks = data.get("tracks", [])
-            # Expose track names for WHEP subscribers to use
-            stream.published_tracks = tracks
-            logger.info(f"[WHIP] Session {session_id} published {len(tracks)} tracks")
-            return {
-                "sdp": answer_sdp,
-                "session_id": session_id,
-                "tracks": tracks,
-                "status": "ok",
-            }
-        logger.error(f"[WHIP] Cloudflare Calls error: {resp.status_code} {resp.text[:400]}")
-        raise HTTPException(status_code=502, detail=f"CF Calls error: {resp.status_code}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[WHIP] Proxy error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class WHEPSdpRequest(BaseModel):
-    stream_id: str
-    sdp: str
-
-
-@app.post("/api/calls/whep")
-async def calls_whep_subscribe(req: WHEPSdpRequest):
-    """
-    WHEP subscriber proxy — forwards viewer SDP offer to pull from existing Calls session.
-    Each viewer creates their OWN Cloudflare Calls session that pulls from the publisher.
-    """
-    stream = stream_manager.get_stream(req.stream_id)
-    if not stream:
-        raise HTTPException(status_code=404, detail="Stream not found")
-    if not stream.calls_session_id:
-        raise HTTPException(status_code=400, detail="Stream has no Cloudflare Calls session")
-
-    from app.cloudflare_realtime import _env, _calls_headers
-    e = _env()
-    try:
-        cf_headers = _calls_headers()
-        publisher_session_id = stream.calls_session_id
-        # Get the published tracks
-        published_tracks = getattr(stream, 'published_tracks', [])
-
-        # 1. Create a new viewer session
-        new_session_resp = requests.post(
-            f"https://rtc.live.cloudflare.com/v1/apps/{e['calls_app_id']}/sessions/new",
-            json={},
-            headers=cf_headers,
-            timeout=10,
-        )
-        if new_session_resp.status_code not in (200, 201):
-            raise HTTPException(status_code=502, detail="Failed to create viewer session")
-
-        viewer_session_id = (new_session_resp.json().get("sessionId")
-                             or new_session_resp.json().get("session_id")
-                             or new_session_resp.json().get("id"))
-
-        # 2. Pull tracks from publisher session into viewer session
-        pull_tracks = []
-        if published_tracks:
-            for t in published_tracks:
-                pull_tracks.append({
-                    "location": "remote",
-                    "trackName": t.get("trackName", t.get("mid", "video")),
-                    "sessionId": publisher_session_id,
-                })
-        else:
-            # Default: pull both video and audio from publisher
-            for name in ["video", "audio"]:
-                pull_tracks.append({
-                    "location": "remote",
-                    "trackName": name,
-                    "sessionId": publisher_session_id,
-                })
-
-        pull_payload = {
-            "sessionDescription": {
-                "type": "offer",
-                "sdp": req.sdp,
-            },
-            "tracks": pull_tracks,
-        }
-        pull_resp = requests.post(
-            f"https://rtc.live.cloudflare.com/v1/apps/{e['calls_app_id']}/sessions/{viewer_session_id}/tracks/new",
-            json=pull_payload,
-            headers=cf_headers,
-            timeout=15,
-        )
-        if pull_resp.status_code in (200, 201):
-            data = pull_resp.json()
-            answer_sdp = (data.get("sessionDescription") or {}).get("sdp", "")
-            requires_renegotiation = data.get("requiresImmediateRenegotiation", False)
-            logger.info(f"[WHEP] Viewer session {viewer_session_id} subscribed to {publisher_session_id} (renegotiation={requires_renegotiation})")
-            return {
-                "sdp": answer_sdp,
-                "viewer_session_id": viewer_session_id,
-                "requires_renegotiation": requires_renegotiation,
-                "status": "ok",
-            }
-        logger.error(f"[WHEP] Pull error: {pull_resp.status_code} {pull_resp.text[:400]}")
-        raise HTTPException(status_code=502, detail=f"CF Calls pull error: {pull_resp.status_code}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[WHEP] Proxy error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-class RenegotiateRequest(BaseModel):
-    stream_id: str
-    viewer_session_id: str
-    sdp: str
-
-
-@app.post("/api/calls/renegotiate")
-async def calls_renegotiate(req: RenegotiateRequest):
-    """
-    Renegotiation endpoint for Cloudflare Calls.
-    Called when the WHEP subscription requires immediate renegotiation.
-    """
-    from app.cloudflare_realtime import _env, _calls_headers
-    e = _env()
-    try:
-        cf_headers = _calls_headers()
-        resp = requests.put(
-            f"https://rtc.live.cloudflare.com/v1/apps/{e['calls_app_id']}/sessions/{req.viewer_session_id}/renegotiate",
-            json={"sessionDescription": {"type": "offer", "sdp": req.sdp}},
-            headers=cf_headers,
-            timeout=10,
-        )
-        if resp.status_code in (200, 201):
-            data = resp.json()
-            answer_sdp = (data.get("sessionDescription") or {}).get("sdp", "")
-            return {"sdp": answer_sdp, "status": "ok"}
-        logger.error(f"[RENEGOTIATE] Error: {resp.status_code} {resp.text[:200]}")
-        raise HTTPException(status_code=502, detail=f"Renegotiation error: {resp.status_code}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[RENEGOTIATE] Proxy error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# WebSocket — audio ingestion (PCM/WAV chunks from publisher → audio AI)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@app.websocket("/ws/audio_in/{stream_id}")
-async def websocket_audio_in(websocket: WebSocket, stream_id: str):
-    """
-    Receives binary WAV/PCM audio chunks from the publisher device.
-    Forwards to the Reyvaz audio event detection model on Modal.
-    Broadcasts any triggered detections via the detection WebSocket channel.
-    """
-    import asyncio as _aio
-
-    await websocket.accept()
-    stream = stream_manager.get_stream(stream_id)
-    if not stream or stream.type != "client_cam":
-        await websocket.close(code=1008)
-        return
-
-    logger.info(f"[WS AUDIO] Publisher connected for audio on stream {stream_id}")
-    await stream_manager.activate_stream(stream)
-
-    async def _run_audio_detection(audio_bytes: bytes):
-        try:
-            b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
-            resp = requests.post(
-                AUDIO_DETECT_URL,
-                json={"audio_b64": b64_audio},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("triggered") and data.get("detections"):
-                    formatted = []
-                    for det in data["detections"]:
-                        formatted.append({
-                            "class_name":     det.get("class_name", "sound_event"),
-                            "confidence":     det.get("max_confidence", 0.8),
-                            "bbox":           {"x1": 0.05, "y1": 0.05, "x2": 0.95, "y2": 0.95},
-                            "detection_type": "weapon",
-                            "is_threat":      True,
-                            "is_weapon":      True,
-                        })
-                    if formatted:
-                        payload = json.dumps({
-                            "type":        "detections",
-                            "detections":  formatted,
-                            "threat_type": "weapon",
-                            "timestamp":   int(_time.time() * 1000),
-                        })
-                        stream_manager._broadcast_text(stream, payload)
-                        stream_manager._broadcast_detections(stream, payload)
-                        logger.info(f"[WS AUDIO] Audio threat on {stream_id}: {[d['class_name'] for d in formatted]}")
-        except Exception as e:
-            logger.error(f"[WS AUDIO] Detection error: {e}")
-
-    try:
-        while stream._running:
-            message = await websocket.receive()
-            if message.get("type") == "websocket.disconnect":
-                break
-            audio_bytes = message.get("bytes")
-            if audio_bytes and len(audio_bytes) > 1000:
-                _aio.create_task(_run_audio_detection(audio_bytes))
-    except WebSocketDisconnect:
-        logger.info(f"[WS AUDIO] Publisher disconnected from audio stream {stream_id}")
-    except Exception as e:
-        logger.error(f"[WS AUDIO] Error on stream {stream_id}: {e}")
-    finally:
-        if stream_manager.get_stream(stream_id):
-            await stream_manager.deactivate_stream(stream)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

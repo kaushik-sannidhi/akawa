@@ -109,16 +109,10 @@ class Stream:
         self.latest_frame_b64: str = ""
         self.last_alert_event_ts: int = 0
 
-        # Cloudflare Realtime Kit meeting ID (legacy RTK path)
+        # Cloudflare Calls session ID (used as meeting room)
         self.cf_meeting_id: str = ""
 
-        # Cloudflare Calls WHIP/WHEP (new ultra-low latency path)
-        self.calls_session_id: str = ""
-        self.whip_url: str = ""
-        self.whep_url: str = ""
-
         # Rolling frame buffer for sequence batching (capped at SEQUENCE_LENGTH)
-        # Stores raw cv2 frames; the AI loop drains it when full.
         self._frame_buffer: deque = deque(maxlen=SEQUENCE_LENGTH)
 
         # Alert clipping
@@ -129,7 +123,6 @@ class Stream:
 
         self.viewer_wss: Set[WebSocket] = set()
         self.detection_wss: Set[WebSocket] = set()
-        self.audio_wss: Set[WebSocket] = set()  # audio ingestion WebSockets
 
         self._running = False
         self._ai_task = None
