@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trash2, Wifi, WifiOff, Mic, MicOff, Volume2, VolumeX, Camera, CameraOff } from "lucide-react";
 import { motion } from "framer-motion";
-import { getPicowsWsUrl } from "@/lib/config";
+import { getWsUrl } from "@/lib/config";
 
 interface StreamNodeProps {
     stream: any;
@@ -213,12 +213,12 @@ export default function StreamNode({
             setNetState("connecting_ws");
             setIsStreaming(false);
 
-            const wsUrl = `${getPicowsWsUrl()}/ws/stream_in/${stream.id}`;
+            const wsUrl = getWsUrl(`/ws/stream_in/${stream.id}`);
             ws = new WebSocket(wsUrl);
             ws.binaryType = "arraybuffer";
 
             ws.onopen = () => {
-                setNetState("streaming_picows");
+                setNetState("streaming");
                 setIsStreaming(true);
 
                 const captureCanvas = document.createElement("canvas");
@@ -226,7 +226,7 @@ export default function StreamNode({
 
                 const publishLoop = (now: number) => {
                     if (!alive) return;
-                    
+
                     if (now - lastCaptureTime >= frameInterval) {
                         const video = hiddenVideoRef.current;
                         if (video && captureCtx && video.readyState >= 2 && videoEnabled) {
@@ -278,13 +278,13 @@ export default function StreamNode({
         const connectViewerWs = () => {
             if (!alive) return;
 
-            const wsUrl = `${getPicowsWsUrl()}/ws/viewer/${stream.id}`;
+            const wsUrl = getWsUrl(`/ws/viewer/${stream.id}`);
             ws = new WebSocket(wsUrl);
             ws.binaryType = "blob";
 
             ws.onopen = (e) => {
                 if (!isOwner) {
-                    setNetState("streaming_picows");
+                    setNetState("streaming");
                     setIsStreaming(true);
                 }
                 pingInterval = setInterval(() => {

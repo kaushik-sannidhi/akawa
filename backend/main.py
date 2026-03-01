@@ -33,17 +33,115 @@ async def lifespan(app):
     print("[STARTUP] Restoring streams from Firebase...")
     _restore_streams_from_firebase()
     
-    from app.picows_server import start_picows_server
-    import asyncio
-    print("[STARTUP] Starting picows WebSocket server on port 9001...")
-    picows_task = asyncio.create_task(start_picows_server(host="0.0.0.0", port=9001))
-    
     print("[STARTUP] Ready.")
     yield
-    picows_task.cancel()
 
 
 app = FastAPI(title="Akawa Detection API", lifespan=lifespan)
+
+# ── WebSocket Endpoints ───────────────────────────────────────────────────────
+
+@app.websocket("/ws/stream_in/{stream_id}")
+async def websocket_stream_in(websocket: WebSocket, stream_id: str):
+    """
+    Standard FastAPI WebSocket for publishers (camera feed).
+    Receives binary JPEG frames and pushes them to AI + broadcasts.
+    """
+    await websocket.accept()
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        await websocket.close(code=1008)
+        return
+
+    stream.publisher_wss.add(websocket)
+    await stream_manager.activate_stream(stream)
+    logger.info(f"[WS PUBLISHER] Connected to {stream_id}")
+
+    try:
+        while True:
+            # Publishers send binary JPEG frames
+            data = await websocket.receive_bytes()
+            if not data:
+                continue
+
+            # Update latest frame
+            try:
+                # Store latest b64 if needed for legacy
+                stream.latest_frame_b64 = base64.b64encode(data).decode("utf-8")
+            except Exception:
+                pass
+
+            # Broadcast bytes to all viewers
+            if stream.viewer_wss:
+                asyncio.create_task(stream_manager._broadcast_binary(stream, data))
+
+            # Decode for AI sequence
+            def _decode_and_push(jpeg_bytes, st):
+                np_arr = np.frombuffer(jpeg_bytes, np.uint8)
+                cv2_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if cv2_frame is not None:
+                    st.latest_frame_cv2 = cv2_frame
+                    st.push_frame(cv2_frame, jpeg_bytes)
+
+            # Offload decoding to a thread to not block the event loop
+            anyio.from_thread.run(_decode_and_push, data, stream)
+
+    except WebSocketDisconnect:
+        logger.info(f"[WS PUBLISHER] Disconnected from {stream_id}")
+    except Exception as e:
+        logger.error(f"[WS PUBLISHER] Error: {e}")
+    finally:
+        stream.publisher_wss.discard(websocket)
+        await stream_manager.deactivate_stream(stream)
+
+
+@app.websocket("/ws/viewer/{stream_id}")
+async def websocket_viewer(websocket: WebSocket, stream_id: str):
+    """
+    Standard FastAPI WebSocket for viewers.
+    Receives binary JPEG frames and text JSON detections.
+    """
+    await websocket.accept()
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        await websocket.close(code=1008)
+        return
+
+    stream.viewer_wss.add(websocket)
+    logger.info(f"[WS VIEWER] Connected to {stream_id}")
+
+    try:
+        while True:
+            # Viewers might send 'ping' text
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        logger.info(f"[WS VIEWER] Disconnected from {stream_id}")
+    except Exception as e:
+        logger.error(f"[WS VIEWER] Error: {e}")
+    finally:
+        stream.viewer_wss.discard(websocket)
+
+
+@app.websocket("/ws/detections/{stream_id}")
+async def websocket_detections(websocket: WebSocket, stream_id: str):
+    """Legacy detection-only websocket."""
+    await websocket.accept()
+    stream = stream_manager.get_stream(stream_id)
+    if not stream:
+        await websocket.close(code=1008)
+        return
+
+    stream.detection_wss.add(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stream.detection_wss.discard(websocket)
+
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 default_origins = [
@@ -51,13 +149,12 @@ default_origins = [
     "http://127.0.0.1:3000",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
+    "https://akawa.ingeniumstem.org",
+    "http://akawa.ingeniumstem.org",
     "https://itsakawa.tech",
     "https://www.itsakawa.tech",
     "https://akawa.vercel.app",
-    "https://akawa.ingeniumstem.org",
-    "https://akawa.onrender.com",
-    "https://server.itsakawa.tech",
-    "https://server.itsakawa.tech"
+    "https://akawa.onrender.com"
 ]
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -70,7 +167,7 @@ allow_origins = configured_origins if configured_origins else default_origins
 allow_all_cors = _env_flag("BACKEND_CORS_ALLOW_ALL", default=False)
 allow_origin_regex = os.getenv(
     "BACKEND_CORS_ORIGIN_REGEX",
-    r"https://([a-zA-Z0-9\-]+\.)?(itsakawa\.tech|vercel\.app|akawa\.onrender\.com)",
+    r"https://([a-zA-Z0-9\-]+\.)?(akawa\.ingeniumstem\.org|itsakawa\.tech|vercel\.app|akawa\.onrender\.com)",
 )
 
 app.add_middleware(
