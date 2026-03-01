@@ -3,7 +3,7 @@ import uuid
 import cv2
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import json
@@ -11,6 +11,11 @@ import base64
 import numpy as np
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Load backend/.env before importing app modules that may read env at import time.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+
 from app.telemetry import telemetry_service
 from app.stream_manager import stream_manager, SEQUENCE_LENGTH
 import requests
@@ -18,10 +23,6 @@ import httpx
 import anyio
 import subprocess
 import time as _time
-from dotenv import load_dotenv
-
-# Load backend/.env so storage/email/runtime settings are applied in local runs.
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ default_origins = [
     "https://itsakawa.tech",
     "https://www.itsakawa.tech",
     "https://akawa.vercel.app",
-    "akawa-production.up.railway.app",
+    "https://akawa.onrender.com",
 ]
 env_origins = os.getenv("BACKEND_CORS_ORIGINS", "")
 configured_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
@@ -1098,12 +1099,16 @@ async def create_report_endpoint(req: CreateReportRequest):
             detections=req.detections,
             video_offset_seconds=req.video_offset_seconds,
             stream_id=req.stream_id,
-            timestamp_ms=req.timestamp,
+            # Server-authoritative event time for report creation.
+            timestamp_ms=int(_time.time() * 1000),
         )
     )
     if report:
         return {"status": "success", "report": report}
-    return {"status": "error", "message": "Failed to create report"}
+    raise HTTPException(
+        status_code=503,
+        detail="Failed to create report. Cloudflare R2 storage is unavailable or upload failed.",
+    )
 
 
 class UpdateReportVLMRequest(BaseModel):
@@ -1177,3 +1182,25 @@ def delete_report_endpoint(uid: str, report_id: str):
     from app.report_service import delete_report
     ok = delete_report(uid, report_id)
     return {"status": "success" if ok else "error"}
+
+
+@app.get("/api/storage/r2-status")
+def r2_status():
+    """
+    Runtime status of Cloudflare R2 integration.
+    Useful to confirm report assets are configured to upload to R2.
+    """
+    from app.r2_storage import (
+        is_r2_configured,
+        R2_ACCOUNT_ID,
+        R2_BUCKET_NAME,
+        R2_PUBLIC_URL,
+    )
+    return {
+        "configured": bool(is_r2_configured()),
+        "account_id_suffix": (R2_ACCOUNT_ID[-6:] if R2_ACCOUNT_ID else ""),
+        "bucket": R2_BUCKET_NAME,
+        "public_url": R2_PUBLIC_URL,
+        "require_r2_uploads": os.getenv("REQUIRE_R2_REPORT_UPLOADS", "true"),
+        "allow_local_fallback": os.getenv("ALLOW_LOCAL_REPORT_FALLBACK", "false"),
+    }

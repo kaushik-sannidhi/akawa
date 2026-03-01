@@ -639,7 +639,7 @@ class StreamManager:
                     clip_path=clip_path,
                     detections=threat_dets,
                     stream_id=stream.id,
-                    timestamp_ms=int(stream.alert_start_ts * 1000),
+                    timestamp_ms=int(time.time() * 1000),
                 )
             except Exception as report_exc:
                 logger.error(f"[REPORT] Auto-report generation failed for clip {event_id}: {report_exc}")

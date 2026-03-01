@@ -3,7 +3,7 @@ Report service for Akawa incident reporting.
 Handles:
 1) VLM summary enrichment
 2) PDF report generation
-3) Cloudflare R2 upload (with local fallback)
+3) Cloudflare R2 upload
 4) Firebase persistence
 5) Optional report-generated email notification
 """
@@ -37,6 +37,17 @@ VLM_REPORT_PROMPT = os.getenv(
         "Summarize the event in clear operational language, include observed behavior, "
         "risk level, and immediate recommended actions. Keep it concise."
     ),
+)
+
+REQUIRE_R2_REPORT_UPLOADS = os.getenv("REQUIRE_R2_REPORT_UPLOADS", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
+ALLOW_LOCAL_REPORT_FALLBACK = os.getenv("ALLOW_LOCAL_REPORT_FALLBACK", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
 )
 
 
@@ -154,12 +165,22 @@ def _upload_or_store(
     if not data:
         return ""
 
-    from app.r2_storage import upload_file as r2_upload
+    from app.r2_storage import is_r2_configured, upload_file as r2_upload
+
+    if not is_r2_configured():
+        msg = "[REPORT] R2 is not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME."
+        if REQUIRE_R2_REPORT_UPLOADS and not ALLOW_LOCAL_REPORT_FALLBACK:
+            raise RuntimeError(msg)
+        logger.warning(msg + " Falling back to local storage.")
+        return _write_local_asset(uid, report_id, key_name, data)
 
     r2_key = f"reports/{uid}/{report_id}/{key_name}"
     r2_url = r2_upload(r2_key, data, content_type)
     if r2_url:
         return r2_url
+    if REQUIRE_R2_REPORT_UPLOADS and not ALLOW_LOCAL_REPORT_FALLBACK:
+        raise RuntimeError(f"[REPORT] Failed uploading '{r2_key}' to R2. Aborting report creation.")
+    logger.warning(f"[REPORT] Upload failed for '{r2_key}'. Falling back to local storage.")
     return _write_local_asset(uid, report_id, key_name, data)
 
 
@@ -233,15 +254,24 @@ def create_report(
     clip_ext, clip_mime = _guess_clip_format(resolved_clip_path, resolved_clip_bytes)
     clip_filename = f"clip{clip_ext}"
 
-    pdf_url = _upload_or_store(uid, report_id, "report.pdf", pdf_bytes, "application/pdf")
-    frame_url = _upload_or_store(uid, report_id, "frame.jpg", frame_jpeg_bytes, "image/jpeg")
-    clip_url = _upload_or_store(
-        uid,
-        report_id,
-        clip_filename,
-        resolved_clip_bytes,
-        clip_mime,
-    )
+    try:
+        pdf_url = _upload_or_store(uid, report_id, "report.pdf", pdf_bytes, "application/pdf")
+        frame_url = _upload_or_store(uid, report_id, "frame.jpg", frame_jpeg_bytes, "image/jpeg")
+        clip_url = _upload_or_store(
+            uid,
+            report_id,
+            clip_filename,
+            resolved_clip_bytes,
+            clip_mime,
+        )
+    except Exception as storage_exc:
+        logger.error(f"[REPORT] Storage stage failed for report {report_id}: {storage_exc}")
+        if temp_mp4_path and os.path.isfile(temp_mp4_path):
+            try:
+                os.remove(temp_mp4_path)
+            except Exception:
+                pass
+        return None
 
     report = {
         "id": report_id,
@@ -309,11 +339,15 @@ def update_report_vlm(
     }
 
     if pdf_bytes:
-        pdf_url = _upload_or_store(
-            uid, report_id, "report.pdf", pdf_bytes, "application/pdf"
-        )
-        if pdf_url:
-            patch["pdf_url"] = pdf_url
+        try:
+            pdf_url = _upload_or_store(
+                uid, report_id, "report.pdf", pdf_bytes, "application/pdf"
+            )
+            if pdf_url:
+                patch["pdf_url"] = pdf_url
+        except Exception as storage_exc:
+            logger.error(f"[REPORT] update_report_vlm storage failed for {report_id}: {storage_exc}")
+            return False
 
     try:
         resp = requests.patch(

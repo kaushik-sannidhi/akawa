@@ -1,7 +1,10 @@
 export const getBaseUrl = () => {
+    if (process.env.NEXT_PUBLIC_API_URL) {
+        return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
+    }
 
-    // Fallback for local development
-    return "akawa-production.up.railway.app";
+    // Default backend target (explicitly use Render).
+    return "https://akawa.onrender.com";
 };
 
 export const getWsUrl = () => {

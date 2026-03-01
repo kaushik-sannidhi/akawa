@@ -7,8 +7,12 @@ import os
 import logging
 import boto3
 from botocore.config import Config
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+# Ensure backend/.env is loaded even when this module is imported directly.
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
@@ -17,6 +21,10 @@ R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "akawa-reports")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")  # e.g. https://pub-xxx.r2.dev
 
 _client = None
+
+
+def is_r2_configured() -> bool:
+    return bool(R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME)
 
 
 def _get_client():
