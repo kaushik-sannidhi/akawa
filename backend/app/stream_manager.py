@@ -254,7 +254,7 @@ class StreamManager:
 
         for task in [stream._ai_task, stream._capture_task, stream._broadcast_task]:
             if task:
-                task.cancel()a
+                task.cancel()
 
         if stream.cf_meeting_id:
             try:

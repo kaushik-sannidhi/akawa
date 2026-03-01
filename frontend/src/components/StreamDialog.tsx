@@ -229,10 +229,10 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
 
                     {streamType === "client_cam" && (
                         <div className="border border-[var(--color-iron)]/50 bg-[var(--color-data)]/5 p-2 text-[9px] text-[var(--color-data)]">
-                            ⚡ CLOUDFLARE_CALLS WHIP/WHEP — ULTRA LOW LATENCY STREAMING
+                            CLOUDFLARE REALTIMEKIT - LOW LATENCY STREAMING
                             <br />
                             ANY SIGNED-IN DEVICE CAN VIEW THIS STREAM IN REAL-TIME.
-                            AI MODELS RUN ON EVERY FRAME.
+                            AI INFERENCE RUNS ON ALL LIVE STREAMS.
                         </div>
                     )}
 
@@ -241,12 +241,13 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                         disabled={loading}
                         className="mt-4 p-3 bg-white text-black font-bold border-[2px] border-white hover:bg-black hover:text-white transition-colors disabled:opacity-50"
                     >
-                        {loading ? "INITIALIZING_WHIP_SESSION..." : "[ ACTIVATE_NODE ]"}
+                        {loading ? "INITIALIZING_REALTIME_SESSION..." : "[ ACTIVATE_NODE ]"}
                     </button>
                 </form>
             </div>
         </div>
     );
 }
+
 
 

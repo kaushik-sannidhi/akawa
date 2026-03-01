@@ -47,17 +47,27 @@ default_origins = [
     "https://www.itsakawa.tech",
     "https://akawa.vercel.app",
     "https://akawa.onrender.com",
-    "https://backend.itsakawa.tech",
+    "https://back.itsakawa.tech",
 ]
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, str(default)).strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
 env_origins = os.getenv("BACKEND_CORS_ORIGINS", "")
 configured_origins = [o.strip() for o in env_origins.split(",") if o.strip()]
 allow_origins = configured_origins if configured_origins else default_origins
+allow_all_cors = _env_flag("BACKEND_CORS_ALLOW_ALL", default=False)
+allow_origin_regex = os.getenv(
+    "BACKEND_CORS_ORIGIN_REGEX",
+    r"https://([a-zA-Z0-9\-]+\.)?(itsakawa\.tech|vercel\.app|akawa\.onrender\.com)",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_origin_regex=r"https://([a-zA-Z0-9\-]+\.)?(itsakawa\.tech|vercel\.app|akawa\.onrender\.com)",
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all_cors else allow_origins,
+    allow_origin_regex=r".*" if allow_all_cors else allow_origin_regex,
+    allow_credentials=False if allow_all_cors else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -468,31 +478,111 @@ def _transcode_video(input_path: str, output_path: str):
     )
 
 
+def _transcode_video_opencv(input_path: str, output_path: str):
+    """
+    Fallback transcoder when ffmpeg is unavailable in the runtime.
+    Produces H.264-compatible-ish MP4 (video only) for browser playback.
+    """
+    cap = cv2.VideoCapture(input_path)
+    if not cap.isOpened():
+        raise RuntimeError("OpenCV failed to open uploaded video")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0 or fps > 240:
+        fps = 25.0
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if width <= 0 or height <= 0:
+        cap.release()
+        raise RuntimeError("OpenCV could not read video resolution")
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    if not writer.isOpened():
+        cap.release()
+        raise RuntimeError("OpenCV VideoWriter failed to initialize")
+
+    frames_written = 0
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            writer.write(frame)
+            frames_written += 1
+    finally:
+        cap.release()
+        writer.release()
+
+    if frames_written == 0:
+        raise RuntimeError("OpenCV fallback wrote zero frames")
+
+
+async def _write_upload_to_disk(upload: UploadFile, target_path: str, chunk_size: int = 4 * 1024 * 1024):
+    """
+    Stream uploaded file to disk in chunks to avoid loading large videos into RAM.
+    """
+    with open(target_path, "wb") as buf:
+        while True:
+            chunk = await upload.read(chunk_size)
+            if not chunk:
+                break
+            buf.write(chunk)
+
+
 @app.post("/api/upload")
 async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous")):
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No upload file was provided.")
+
     video_id   = str(uuid.uuid4())
     safe_name  = "".join(c if c.isalnum() or c in "._-" else "_" for c in file.filename)
+    if not safe_name:
+        safe_name = f"{video_id}.mp4"
+
     orig_path  = os.path.join(UPLOAD_DIR, f"{video_id}_orig_{safe_name}")
     final_name = f"{video_id}_{os.path.splitext(safe_name)[0]}.mp4"
     final_path = os.path.join(UPLOAD_DIR, final_name)
 
-    with open(orig_path, "wb") as buf:
-        buf.write(await file.read())
+    try:
+        await _write_upload_to_disk(file, orig_path)
+    except Exception as exc:
+        logger.error(f"Failed writing upload to disk: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded file.")
 
+    transcode_mode = "ffmpeg"
     try:
         await anyio.to_thread.run_sync(_transcode_video, orig_path, final_path)
-    except Exception as e:
-        logger.error(f"Transcoding failed: {e}")
-        if safe_name.lower().endswith(".mp4"):
-            os.rename(orig_path, final_path)
-        else:
-            return {"error": f"INGESTION_FAILED: {e}"}
+    except Exception as ffmpeg_exc:
+        logger.warning(f"ffmpeg transcode failed, trying OpenCV fallback: {ffmpeg_exc}")
+        try:
+            await anyio.to_thread.run_sync(_transcode_video_opencv, orig_path, final_path)
+            transcode_mode = "opencv"
+        except Exception as cv_exc:
+            logger.error(f"OpenCV transcode fallback failed: {cv_exc}")
+            if safe_name.lower().endswith(".mp4"):
+                os.replace(orig_path, final_path)
+                transcode_mode = "copy"
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"INGESTION_FAILED: could not transcode upload ({ffmpeg_exc}) / ({cv_exc})",
+                )
     finally:
         if os.path.exists(final_path) and os.path.exists(orig_path):
-            try: os.remove(orig_path)
-            except: pass
+            try:
+                os.remove(orig_path)
+            except Exception:
+                pass
+
+    if not os.path.exists(final_path):
+        raise HTTPException(status_code=500, detail="Upload completed but no output video was produced.")
 
     cap         = cv2.VideoCapture(final_path)
+    if not cap.isOpened():
+        raise HTTPException(status_code=422, detail="Output video cannot be opened for analysis.")
+
     fps         = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     duration    = frame_count / fps if fps > 0 else 0
@@ -501,7 +591,7 @@ async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous"
     cap.release()
 
     telemetry_service._push_syslog(
-        f"[INFO] BACKEND INGESTED FORENSIC PAYLOAD {file.filename} (TRANSCODED TO MP4)", uid
+        f"[INFO] BACKEND INGESTED FORENSIC PAYLOAD {file.filename} (MODE={transcode_mode.upper()})", uid
     )
     return {
         "video_id": video_id,
@@ -524,14 +614,19 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
     """
     matching = [f for f in os.listdir(UPLOAD_DIR) if f.startswith(video_id)]
     if not matching:
-        return {"error": "Video not found"}
+        raise HTTPException(status_code=404, detail="Video not found")
 
     file_path  = os.path.join(UPLOAD_DIR, matching[0])
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Video file is missing on disk")
+
     BATCH_SIZE = SEQUENCE_LENGTH   # keep in sync with stream_manager
 
     async def generate():
         def _get_cap_info():
             cap         = cv2.VideoCapture(file_path)
+            if not cap.isOpened():
+                raise RuntimeError("Failed to open uploaded video for analysis")
             fps         = cap.get(cv2.CAP_PROP_FPS) or 30
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             return cap, fps, total_frames
@@ -607,7 +702,15 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
         await anyio.to_thread.run_sync(cap.release)
         yield f"data: {json.dumps({'type': 'done', 'total_analyzed': sample_count})}\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
@@ -804,12 +907,30 @@ async def create_stream(req: StreamCreateRequest):
     cf_meeting_id = ""
     if req.stream_type == "client_cam":
         try:
-            from app.cloudflare_realtime import create_meeting
+            from app.cloudflare_realtime import create_meeting, is_configured
+
+            if not is_configured():
+                raise HTTPException(
+                    status_code=503,
+                    detail="Cloudflare Realtime is not configured on backend.",
+                )
+
             meeting = create_meeting(title=req.name)
             if meeting:
                 cf_meeting_id = meeting["meeting_id"]
+            if not cf_meeting_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Failed to provision a Cloudflare Realtime meeting.",
+                )
         except Exception as e:
             logger.error(f"[API] CF meeting provisioning failed: {e}")
+            if isinstance(e, HTTPException):
+                raise
+            raise HTTPException(
+                status_code=502,
+                detail="Cloudflare Realtime meeting provisioning failed.",
+            )
 
     stream = stream_manager.add_stream(
         name=req.name,
@@ -992,9 +1113,11 @@ class RealtimeJoinRequest(BaseModel):
 async def realtime_join(req: RealtimeJoinRequest):
     stream = stream_manager.get_stream(req.stream_id)
     if not stream or not stream.cf_meeting_id:
-        return {"error": "Stream not found or Realtime Kit not configured"}
+        raise HTTPException(status_code=404, detail="Stream not found or Realtime meeting is missing.")
 
-    from app.cloudflare_realtime import add_participant
+    from app.cloudflare_realtime import add_participant, is_configured
+    if not is_configured():
+        raise HTTPException(status_code=503, detail="Cloudflare Realtime is not configured.")
     pid    = req.device_id or f"anon-{uuid.uuid4().hex[:12]}"
     result = add_participant(
         meeting_id=stream.cf_meeting_id,

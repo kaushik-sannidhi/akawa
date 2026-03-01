@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { getBaseUrl } from "@/lib/config";
+import { useEffect, useRef, useState } from "react";
+import { getBaseUrl, resolveBaseUrl } from "@/lib/config";
 import { auth } from "@/lib/firebase";
 
 const WEAPON_CLASSES = ["gun", "knife", "violence"];
@@ -41,6 +41,17 @@ export default function VideoPlayer({
     const [videoError, setVideoError] = useState<string | null>(null);
     const detectionMapRef = useRef<FrameDetections[]>([]);
     const alertsFiredRef = useRef<Set<string>>(new Set());
+    const [baseUrl, setBaseUrl] = useState(getBaseUrl());
+
+    useEffect(() => {
+        let cancelled = false;
+        resolveBaseUrl(7000).then((url) => {
+            if (!cancelled) setBaseUrl(url);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         if (seekTrigger && videoRef.current) {
@@ -62,8 +73,12 @@ export default function VideoPlayer({
 
         const runAnalysis = async () => {
             try {
+                const resolvedBaseUrl = await resolveBaseUrl(7000);
+                if (!abortController.signal.aborted) {
+                    setBaseUrl(resolvedBaseUrl);
+                }
                 const res = await fetch(
-                    `${getBaseUrl()}/api/analyze/${videoId}?uid=${encodeURIComponent(uid)}&model_id=${encodeURIComponent(modelId)}`,
+                    `${resolvedBaseUrl}/api/analyze/${videoId}?uid=${encodeURIComponent(uid)}&model_id=${encodeURIComponent(modelId)}`,
                     { signal: abortController.signal }
                 );
 
@@ -129,7 +144,7 @@ export default function VideoPlayer({
 
         runAnalysis();
         return () => abortController.abort();
-    }, [videoId]);
+    }, [videoId, modelId]);
 
     // Track recently captured clip timestamps to prevent overlapping captures
     const lastClipTimeRef = useRef<number>(-10); // initialized far past
@@ -144,7 +159,7 @@ export default function VideoPlayer({
             const hiddenVideo = document.createElement("video");
             hiddenVideo.crossOrigin = "anonymous";
             hiddenVideo.preload = "auto";
-            hiddenVideo.src = `${getBaseUrl()}${videoUrl}`;
+            hiddenVideo.src = `${baseUrl}${videoUrl}`;
             hiddenVideo.muted = true;
             hiddenVideo.playsInline = true;
 
@@ -430,7 +445,7 @@ export default function VideoPlayer({
 
             <video
                 ref={videoRef}
-                src={`${getBaseUrl()}${videoUrl}`}
+                src={`${baseUrl}${videoUrl}`}
                 controls
                 className="w-full h-full object-contain"
                 crossOrigin="anonymous"

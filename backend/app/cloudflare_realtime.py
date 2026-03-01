@@ -1,98 +1,151 @@
 """
-Cloudflare Calls — Meetings (Sessions) & Participants API + TURN credentials.
+Cloudflare RealtimeKit backend integration.
 
-The @cloudflare/realtimekit SDK on the frontend talks to Cloudflare Calls.
-We use the raw Calls HTTP API server-side to create sessions and issue auth tokens.
-
-Env vars required:
-    CF_APP_ID         – Cloudflare Calls App ID
-    CF_APP_SECRET     – Cloudflare Calls App Secret
-    CF_TURN_KEY_ID    – (optional) Cloudflare TURN key ID
-    CF_TURN_API_TOKEN – (optional) Cloudflare TURN API token
+This module provisions meeting rooms and participant auth tokens through the
+Cloudflare Calls API and returns TURN credentials for WebRTC fallback.
 """
 
+from __future__ import annotations
+
+import logging
 import os
 import time
-import logging
+from typing import Any, Dict, Optional
+
 import requests
-from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# ── Env vars ──────────────────────────────────────────────────────────────────
+API_TIMEOUT_SECONDS = 12
+
+
+def _first_env(*keys: str) -> str:
+    for key in keys:
+        value = (os.getenv(key) or "").strip()
+        if value:
+            return value
+    return ""
+
 
 def _env() -> Dict[str, str]:
     return {
-        "app_id":       os.getenv("CF_APP_ID", ""),
-        "app_secret":   os.getenv("CF_APP_SECRET", ""),
-        "turn_key_id":  os.getenv("CF_TURN_KEY_ID", ""),
-        "turn_token":   os.getenv("CF_TURN_API_TOKEN", ""),
+        "account_id": _first_env("CF_ACCOUNT_ID", "CLOUDFLARE_ACCOUNT_ID", "R2_ACCOUNT_ID"),
+        "app_id": _first_env("CF_CALLS_APP_ID", "CF_APP_ID"),
+        "api_token": _first_env("CF_CALLS_API_TOKEN", "CF_CALLS_APP_SECRET", "CF_APP_SECRET"),
+        "turn_key_id": _first_env("CF_TURN_KEY_ID"),
+        "turn_token": _first_env("CF_TURN_API_TOKEN"),
     }
 
-def _base() -> str:
-    e = _env()
-    return f"https://rtc.live.cloudflare.com/v1/apps/{e['app_id']}"
 
-def _headers() -> Dict[str, str]:
+def _calls_base() -> str:
+    env = _env()
+    return (
+        "https://api.cloudflare.com/client/v4/accounts/"
+        f"{env['account_id']}/calls/apps/{env['app_id']}"
+    )
+
+
+def _calls_headers() -> Dict[str, str]:
+    env = _env()
     return {
-        "Authorization": f"Bearer {_env()['app_secret']}",
+        "Authorization": f"Bearer {env['api_token']}",
         "Content-Type": "application/json",
     }
 
+
 def is_configured() -> bool:
-    e = _env()
-    return bool(e["app_id"] and e["app_secret"])
+    env = _env()
+    return bool(env["account_id"] and env["app_id"] and env["api_token"])
 
 
-# ── TURN credential cache ────────────────────────────────────────────────────
-_turn_cache: Dict[str, Any] = {}
-_TURN_TTL_SECONDS = 3600
-_TURN_REFRESH_BUFFER = 300
+def status() -> Dict[str, Any]:
+    env = _env()
+    return {
+        "configured": is_configured(),
+        "has_account_id": bool(env["account_id"]),
+        "has_app_id": bool(env["app_id"]),
+        "has_api_token": bool(env["api_token"]),
+        "has_turn_key_id": bool(env["turn_key_id"]),
+        "has_turn_api_token": bool(env["turn_token"]),
+        "account_id_suffix": env["account_id"][-6:] if env["account_id"] else "",
+        "app_id_suffix": env["app_id"][-6:] if env["app_id"] else "",
+    }
 
 
-# ─────────────────────────────────────── Sessions (Meetings) ─────────────────
+def _parse_cf_response(response: requests.Response, operation: str) -> Optional[Dict[str, Any]]:
+    try:
+        payload = response.json()
+    except Exception:
+        logger.error(
+            "%s failed with non-JSON response (%s): %s",
+            operation,
+            response.status_code,
+            response.text[:300],
+        )
+        return None
+
+    if response.status_code not in (200, 201):
+        logger.error("%s failed (%s): %s", operation, response.status_code, payload)
+        return None
+
+    if payload.get("success") is False:
+        logger.error("%s unsuccessful response: %s", operation, payload)
+        return None
+
+    return payload.get("result") or payload.get("data") or payload
+
 
 def create_meeting(title: str) -> Optional[Dict[str, Any]]:
-    """
-    Create a Cloudflare Calls session (acts as a 'meeting room').
-    Returns {"meeting_id": ..., "title": ...} or None.
-    """
+    """Create a Calls meeting and return a normalized result."""
     if not is_configured():
-        logger.warning("Cloudflare Calls not configured (no CF_APP_ID / CF_APP_SECRET).")
+        logger.warning("Cloudflare Calls is not configured. Missing account/app/token env vars.")
         return None
+
+    meeting_name = (title or "").strip()[:120] or f"akawa-{int(time.time())}"
 
     try:
-        resp = requests.post(
-            f"{_base()}/sessions/new",
-            json={},
-            headers=_headers(),
-            timeout=10,
+        response = requests.post(
+            f"{_calls_base()}/meetings",
+            headers=_calls_headers(),
+            json={"name": meeting_name},
+            timeout=API_TIMEOUT_SECONDS,
         )
-        if resp.status_code in (200, 201):
-            body = resp.json()
-            session_id = body.get("sessionId") or body.get("session_id") or body.get("id")
-            if session_id:
-                logger.info(f"Created CF Calls session {session_id} — {title}")
-                return {"meeting_id": session_id, "title": title}
-        logger.error(f"create_meeting failed: {resp.status_code} {resp.text[:400]}")
-        return None
+        result = _parse_cf_response(response, "create_meeting")
+        if not result:
+            return None
+
+        meeting_id = result.get("id") or result.get("meeting_id")
+        if not meeting_id:
+            logger.error("create_meeting response missing meeting id: %s", result)
+            return None
+
+        return {
+            "meeting_id": meeting_id,
+            "name": result.get("name") or meeting_name,
+        }
     except Exception as exc:
-        logger.error(f"create_meeting exception: {exc}")
+        logger.error("create_meeting exception: %s", exc)
         return None
 
 
-def close_meeting(meeting_id: str, retries: int = 2) -> bool:
-    """Cloudflare Calls sessions auto-expire. Log for housekeeping."""
-    if not is_configured() or not meeting_id:
+def close_meeting(meeting_id: str) -> bool:
+    """Attempt to delete a meeting. Missing meetings are treated as closed."""
+    if not meeting_id or not is_configured():
         return False
-    logger.info(f"CF Calls session {meeting_id} marked closed (auto-expires)")
-    return True
 
-
-# ──────────────────────────────────── Participants ────────────────────────────
-
-_PRESET_PUBLISHER = "group_call_host"
-_PRESET_VIEWER    = "group_call_participant"
+    try:
+        response = requests.delete(
+            f"{_calls_base()}/meetings/{meeting_id}",
+            headers=_calls_headers(),
+            timeout=API_TIMEOUT_SECONDS,
+        )
+        if response.status_code in (200, 202, 204, 404):
+            return True
+        logger.warning("close_meeting returned status %s for %s", response.status_code, meeting_id)
+        return False
+    except Exception as exc:
+        logger.error("close_meeting exception for %s: %s", meeting_id, exc)
+        return False
 
 
 def add_participant(
@@ -101,69 +154,65 @@ def add_participant(
     name: str = "participant",
     role: str = "viewer",
 ) -> Optional[Dict[str, Any]]:
-    """
-    Add a participant to a Calls session using the New Tracks API.
-
-    For Cloudflare Calls, we create a new session for each participant
-    and return the session info so the frontend SDK can connect.
-
-    The @cloudflare/realtimekit SDK handles the WebRTC negotiation.
-    We just need to provide an auth token (the app secret is used to
-    generate per-participant tokens via the Calls API).
-    """
-    if not is_configured() or not meeting_id:
+    """Add participant to an existing meeting and return auth token."""
+    if not meeting_id or not is_configured():
         return None
+
+    safe_role = "publisher" if role == "publisher" else "viewer"
+    safe_participant_id = (participant_id or "").strip()[:128]
+    if not safe_participant_id:
+        safe_participant_id = f"anon-{int(time.time() * 1000)}"
+
+    payload = {
+        "name": (name or "participant").strip()[:120] or "participant",
+        "clientSpecificId": safe_participant_id,
+        "role": safe_role,
+    }
 
     try:
-        # For Cloudflare Calls, we create participant sessions
-        # The auth token is the meeting_id + participant combo
-        # The frontend SDK will use this to establish WebRTC
-        resp = requests.post(
-            f"{_base()}/sessions/new",
-            json={},
-            headers=_headers(),
-            timeout=10,
+        response = requests.post(
+            f"{_calls_base()}/meetings/{meeting_id}/participants",
+            headers=_calls_headers(),
+            json=payload,
+            timeout=API_TIMEOUT_SECONDS,
         )
-        if resp.status_code in (200, 201):
-            body = resp.json()
-            session_id = body.get("sessionId") or body.get("session_id") or body.get("id")
-            if session_id:
-                # For the RTK SDK, the auth token combines the app secret
-                # and session info. The SDK expects a specific token format.
-                # We pass the session ID as the token — the SDK init will
-                # use it to connect to the correct session.
-                logger.info(f"Added {role} participant {participant_id} → session {session_id}")
-                return {
-                    "participant_id": participant_id,
-                    "token": session_id,  # Session ID used by frontend
-                    "custom_participant_id": participant_id,
-                    "role": role,
-                    "session_id": session_id,
-                    "meeting_id": meeting_id,
-                }
-        logger.error(f"add_participant failed: {resp.status_code} {resp.text[:400]}")
-        return None
+        result = _parse_cf_response(response, "add_participant")
+        if not result:
+            return None
+
+        token = result.get("token")
+        if not token:
+            logger.error("add_participant response missing token: %s", result)
+            return None
+
+        return {
+            "participant_id": result.get("id") or safe_participant_id,
+            "token": token,
+            "custom_participant_id": safe_participant_id,
+            "role": safe_role,
+            "meeting_id": meeting_id,
+        }
     except Exception as exc:
-        logger.error(f"add_participant exception: {exc}")
+        logger.error("add_participant exception: %s", exc)
         return None
 
 
 def remove_participant(meeting_id: str, participant_id: str) -> bool:
-    """Sessions auto-expire. Nothing to explicitly remove."""
-    return True
+    """Participants are transient; no explicit removal required."""
+    return bool(meeting_id and participant_id)
 
 
-# ─────────────────────────────────── TURN credentials ────────────────────────
+_turn_cache: Dict[str, Any] = {}
+_TURN_TTL_SECONDS = 3600
+_TURN_REFRESH_BUFFER = 300
+
 
 def get_turn_credentials() -> Dict[str, Any]:
-    """
-    Return ICE server config for WebRTC.
-    Cached for _TURN_TTL_SECONDS, falls back to STUN-only.
-    """
+    """Return ICE server config for WebRTC, preferring Cloudflare TURN."""
     global _turn_cache
 
-    e = _env()
-    if not (e["turn_key_id"] and e["turn_token"]):
+    env = _env()
+    if not (env["turn_key_id"] and env["turn_token"]):
         return _stun_only()
 
     now = time.time()
@@ -171,18 +220,19 @@ def get_turn_credentials() -> Dict[str, Any]:
         return {"iceServers": _turn_cache["ice_servers"]}
 
     try:
-        resp = requests.post(
-            f"https://rtc.live.cloudflare.com/v1/turn/keys/{e['turn_key_id']}/credentials/generate",
-            json={"ttl": _TURN_TTL_SECONDS},
+        response = requests.post(
+            f"https://rtc.live.cloudflare.com/v1/turn/keys/{env['turn_key_id']}/credentials/generate",
             headers={
-                "Authorization": f"Bearer {e['turn_token']}",
+                "Authorization": f"Bearer {env['turn_token']}",
                 "Content-Type": "application/json",
             },
-            timeout=10,
+            json={"ttl": _TURN_TTL_SECONDS},
+            timeout=API_TIMEOUT_SECONDS,
         )
-        if resp.status_code in (200, 201):
-            ice = resp.json().get("iceServers", {})
-            username   = ice.get("username", "")
+        if response.status_code in (200, 201):
+            data = response.json()
+            ice = data.get("iceServers", {})
+            username = ice.get("username", "")
             credential = ice.get("credential", "")
             if username and credential:
                 servers = [
@@ -201,12 +251,11 @@ def get_turn_credentials() -> Dict[str, Any]:
                     "ice_servers": servers,
                     "expires_at": now + _TURN_TTL_SECONDS,
                 }
-                logger.info("Refreshed Cloudflare TURN credentials (cached)")
                 return {"iceServers": servers}
 
-        logger.warning(f"TURN credential request failed: {resp.status_code}")
+        logger.warning("TURN credentials request failed with status %s", response.status_code)
     except Exception as exc:
-        logger.error(f"TURN credential exception: {exc}")
+        logger.error("TURN credential exception: %s", exc)
 
     return _stun_only()
 

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { HardDriveDownload } from "lucide-react";
 import { useTelemetry } from "@/context/TelemetryContext";
 import { auth } from "@/lib/firebase";
-import { getBaseUrl } from "@/lib/config";
+import { resolveBaseUrl } from "@/lib/config";
 
 export default function VideoUpload({ onUploadComplete }: { onUploadComplete: (data: any) => void }) {
     const { logSysEvent } = useTelemetry();
@@ -31,21 +31,30 @@ export default function VideoUpload({ onUploadComplete }: { onUploadComplete: (d
         formData.append("uid", auth.currentUser?.uid || "anonymous");
 
         try {
+            const baseUrl = await resolveBaseUrl(7000);
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 120000); // 2 min for large files
-            const res = await fetch(`${getBaseUrl()}/api/upload`, {
+            // Large uploads + transcoding can exceed 2 minutes.
+            const timer = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+            const res = await fetch(`${baseUrl}/api/upload`, {
                 method: "POST",
                 body: formData,
                 signal: controller.signal,
             });
             clearTimeout(timer);
-            if (!res.ok) throw new Error(`INGESTION_FAILED (HTTP ${res.status})`);
-            const data = await res.json();
+
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data?.error || data?.detail) {
+                const detail = data?.detail || data?.error || `INGESTION_FAILED (HTTP ${res.status})`;
+                throw new Error(String(detail));
+            }
             logSysEvent(`[INFO] INGESTION COMPLETE. BINDING ANALYSIS ENGINE TO [${file.name.toUpperCase()}]`);
             onUploadComplete(data);
         } catch (err: any) {
-            logSysEvent(`[ERROR] INGESTION FAILED - ${err.message}`);
-            setError(`[ INGESTION ERROR ] ${err.message}`);
+            const message = err?.name === "AbortError"
+                ? "UPLOAD TIMED OUT DURING INGESTION/TRANSCODING."
+                : (err?.message || "UNKNOWN INGESTION FAILURE");
+            logSysEvent(`[ERROR] INGESTION FAILED - ${message}`);
+            setError(`[ INGESTION ERROR ] ${message}`);
         } finally {
             setIsUploading(false);
         }
