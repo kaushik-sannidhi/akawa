@@ -109,8 +109,13 @@ class Stream:
         self.latest_frame_b64: str = ""
         self.last_alert_event_ts: int = 0
 
-        # Cloudflare Realtime Kit meeting ID
+        # Cloudflare Realtime Kit meeting ID (legacy RTK path)
         self.cf_meeting_id: str = ""
+
+        # Cloudflare Calls WHIP/WHEP (new ultra-low latency path)
+        self.calls_session_id: str = ""
+        self.whip_url: str = ""
+        self.whep_url: str = ""
 
         # Rolling frame buffer for sequence batching (capped at SEQUENCE_LENGTH)
         # Stores raw cv2 frames; the AI loop drains it when full.
@@ -124,6 +129,7 @@ class Stream:
 
         self.viewer_wss: Set[WebSocket] = set()
         self.detection_wss: Set[WebSocket] = set()
+        self.audio_wss: Set[WebSocket] = set()  # audio ingestion WebSockets
 
         self._running = False
         self._ai_task = None
@@ -163,6 +169,9 @@ class Stream:
             "status": self.status,
             "subscriber_count": len(self.viewer_wss) + len(self.detection_wss),
             "cf_meeting_id": self.cf_meeting_id,
+            "calls_session_id": self.calls_session_id,
+            "whip_url": self.whip_url,
+            "whep_url": self.whep_url,
         }
 
 
@@ -174,9 +183,15 @@ class StreamManager:
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
                    model_id: str = "latest", device_id: str = "",
                    stream_id: str = None, skip_ai: bool = False,
-                   cf_meeting_id: str = "") -> Stream:
+                   cf_meeting_id: str = "",
+                   calls_session_id: str = "",
+                   whip_url: str = "",
+                   whep_url: str = "") -> Stream:
         stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id)
         stream.cf_meeting_id = cf_meeting_id
+        stream.calls_session_id = calls_session_id
+        stream.whip_url = whip_url
+        stream.whep_url = whep_url
 
         self.streams[stream.id] = stream
         logger.info(f"====== NEW STREAM CREATED ======")

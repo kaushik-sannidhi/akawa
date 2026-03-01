@@ -1,10 +1,13 @@
 """
 Cloudflare Realtime Kit — Meetings & Participants API + TURN credentials.
+Cloudflare Calls — WHIP/WHEP sessions for ultra-low latency live streaming.
 
 Env vars required:
     CF_ACCOUNT_ID      – Cloudflare account ID
-    CF_REALTIME_APP_ID – Realtime Kit App ID
+    CF_REALTIME_APP_ID – Realtime Kit App ID (for RTK meetings fallback)
     CF_REALTIME_TOKEN  – Cloudflare API token (Realtime / Realtime Admin permission)
+    CF_CALLS_APP_ID    – Cloudflare Calls App ID (for WHIP/WHEP)
+    CF_CALLS_APP_SECRET – Cloudflare Calls App Secret
     CF_TURN_KEY_ID     – (optional) Cloudflare TURN key ID
     CF_TURN_API_TOKEN  – (optional) Cloudflare TURN API token
 """
@@ -20,17 +23,33 @@ logger = logging.getLogger(__name__)
 # ── Env vars read lazily so Docker/Railway env injection works correctly ──────
 def _env() -> Dict[str, str]:
     return {
-        "account_id":  os.getenv("CF_ACCOUNT_ID", ""),
-        "app_id":      os.getenv("CF_REALTIME_APP_ID", ""),
-        "token":       os.getenv("CF_REALTIME_TOKEN", ""),
-        "turn_key_id": os.getenv("CF_TURN_KEY_ID", ""),
-        "turn_token":  os.getenv("CF_TURN_API_TOKEN", ""),
+        "account_id":        os.getenv("CF_ACCOUNT_ID", ""),
+        "app_id":            os.getenv("CF_REALTIME_APP_ID", ""),
+        "token":             os.getenv("CF_REALTIME_TOKEN", ""),
+        # Cloudflare Calls App credentials (for WHIP/WHEP)
+        "calls_app_id":      os.getenv("CF_CALLS_APP_ID", os.getenv("CF_APP_ID", "")),
+        "calls_app_secret":  os.getenv("CF_CALLS_APP_SECRET", os.getenv("CF_APP_SECRET", "")),
+        "turn_key_id":       os.getenv("CF_TURN_KEY_ID", ""),
+        "turn_token":        os.getenv("CF_TURN_API_TOKEN", ""),
     }
 
 def _base() -> str:
     e = _env()
     return (f"https://api.cloudflare.com/client/v4/accounts/{e['account_id']}"
             f"/realtime/kit/{e['app_id']}")
+
+def _calls_base() -> str:
+    """Base URL for Cloudflare Calls API."""
+    e = _env()
+    # Cloudflare Calls API: https://rtc.live.cloudflare.com/v1/apps/{app_id}
+    return f"https://rtc.live.cloudflare.com/v1/apps/{e['calls_app_id']}"
+
+def _calls_headers() -> Dict[str, str]:
+    """Auth headers for Cloudflare Calls API using App Secret."""
+    return {
+        "Authorization": f"Bearer {_env()['calls_app_secret']}",
+        "Content-Type": "application/json",
+    }
 
 def _headers() -> Dict[str, str]:
     return {
@@ -41,6 +60,63 @@ def _headers() -> Dict[str, str]:
 def is_configured() -> bool:
     e = _env()
     return bool(e["account_id"] and e["app_id"] and e["token"])
+
+def is_calls_configured() -> bool:
+    """Check if Cloudflare Calls (WHIP/WHEP) is configured."""
+    e = _env()
+    return bool(e["calls_app_id"] and e["calls_app_secret"])
+
+
+# ─────────────────────────────────── Cloudflare Calls (WHIP/WHEP) ────────────
+
+def create_calls_session() -> Optional[Dict[str, Any]]:
+    """
+    Create a Cloudflare Calls session.
+    Returns {"session_id": ..., "session_description": ...} or None.
+
+    Each stream gets one session. The WHIP URL is constructed from session_id.
+    Cloudflare Calls uses direct WHIP/WHEP for ultra-low latency (sub-200ms).
+    """
+    if not is_calls_configured():
+        logger.warning("Cloudflare Calls not configured — skipping create_calls_session.")
+        return None
+
+    try:
+        resp = requests.post(
+            f"{_calls_base()}/sessions/new",
+            json={},
+            headers=_calls_headers(),
+            timeout=10,
+        )
+        if resp.status_code in (200, 201):
+            body = resp.json()
+            session_id = body.get("sessionId") or body.get("session_id") or body.get("id")
+            if session_id:
+                e = _env()
+                logger.info(f"Created Cloudflare Calls session {session_id}")
+                return {
+                    "session_id": session_id,
+                    # WHIP URL for publishing (browser → Cloudflare SFU)
+                    "whip_url": f"https://rtc.live.cloudflare.com/v1/apps/{e['calls_app_id']}/sessions/{session_id}/tracks/new",
+                    # WHEP URL for subscribing — viewers use same session via tracks
+                    "whep_url": f"https://rtc.live.cloudflare.com/v1/apps/{e['calls_app_id']}/sessions/{session_id}/tracks/new",
+                    "session_description": body.get("sessionDescription"),
+                }
+        logger.error(f"create_calls_session failed: {resp.status_code} {resp.text[:400]}")
+        return None
+    except Exception as exc:
+        logger.error(f"create_calls_session exception: {exc}")
+        return None
+
+
+def close_calls_session(session_id: str) -> bool:
+    """Close/cleanup a Cloudflare Calls session."""
+    if not is_calls_configured() or not session_id:
+        return False
+    # Cloudflare Calls sessions expire automatically, but we can close them
+    # by sending a close request if needed. For now, sessions auto-close.
+    logger.info(f"Cloudflare Calls session {session_id} will auto-expire.")
+    return True
 
 
 # ── TURN credential cache — valid 24h, refresh 30 min before expiry ───────────
