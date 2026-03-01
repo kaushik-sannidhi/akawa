@@ -208,7 +208,7 @@ class StreamManager:
 
                 result = await asyncio.to_thread(
                     proxy_fast_vision_sequence,
-                    cv2_frames,
+                    frame_pairs,
                     stream.id,
                     source_type="live",
                 )
@@ -242,21 +242,49 @@ class StreamManager:
             class_name=threat_type,
         )
 
+    def _enqueue_ws_message(self, stream: Stream, ws: WebSocket, is_binary: bool, payload: Any):
+        if not hasattr(ws, "_msg_queue"):
+            ws._msg_queue = asyncio.Queue(maxsize=30)
+            
+            async def _worker(client_ws):
+                try:
+                    while True:
+                        msg_is_binary, msg_payload = await client_ws._msg_queue.get()
+                        if msg_is_binary:
+                            await client_ws.send_bytes(msg_payload)
+                        else:
+                            await client_ws.send_text(msg_payload)
+                except Exception:
+                    pass
+                finally:
+                    # Clean up
+                    stream.viewer_wss.discard(client_ws)
+                    stream.publisher_wss.discard(client_ws)
+                    stream.detection_wss.discard(client_ws)
+            
+            ws._worker_task = asyncio.create_task(_worker(ws))
+        
+        # If queue is full, drop the OLDEST frame to stay real-time
+        if ws._msg_queue.full():
+            try:
+                ws._msg_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        
+        try:
+            ws._msg_queue.put_nowait((is_binary, payload))
+        except asyncio.QueueFull:
+            pass
+
     async def _broadcast_text(self, stream: Stream, data: str):
         targets = list(stream.viewer_wss) + list(stream.publisher_wss) + list(stream.detection_wss)
-        if not targets: return
-        async def _send(ws):
-            try: await ws.send_text(data)
-            except: stream.viewer_wss.discard(ws); stream.publisher_wss.discard(ws); stream.detection_wss.discard(ws)
-        await asyncio.gather(*[_send(ws) for ws in targets], return_exceptions=True)
+        for ws in targets:
+            self._enqueue_ws_message(stream, ws, False, data)
 
     async def _broadcast_binary(self, stream: Stream, data: bytes):
         targets = list(stream.viewer_wss)
-        if not targets: return
-        async def _send(ws):
-            try: await ws.send_bytes(data)
-            except: stream.viewer_wss.discard(ws)
-        await asyncio.gather(*[_send(ws) for ws in targets], return_exceptions=True)
+        for ws in targets:
+            self._enqueue_ws_message(stream, ws, True, data)
 
     async def remove_stream(self, stream_id: str):
         if stream_id not in self.streams: return

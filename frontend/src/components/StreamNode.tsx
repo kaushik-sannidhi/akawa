@@ -235,12 +235,17 @@ export default function StreamNode({
             ws = new WebSocket(wsUrl);
             ws.binaryType = "arraybuffer";
 
+            let pingInterval: ReturnType<typeof setInterval> | null = null;
             ws.onopen = () => {
                 setNetState("streaming");
                 setIsStreaming(true);
 
                 const captureCanvas = document.createElement("canvas");
                 const captureCtx = captureCanvas.getContext("2d", { alpha: false });
+
+                pingInterval = setInterval(() => {
+                    if (ws?.readyState === WebSocket.OPEN) ws.send(new Blob([]));
+                }, 15000);
 
                 const publishLoop = (now: number) => {
                     if (!alive) return;
@@ -255,7 +260,10 @@ export default function StreamNode({
                             captureCanvas.toBlob(
                                 (blob) => {
                                     if (blob && ws?.readyState === WebSocket.OPEN) {
-                                        ws.send(blob);
+                                        // Drop frame client-side if buffer > 2MB to prevent disconnect
+                                        if (ws.bufferedAmount < 2000000) {
+                                            ws.send(blob);
+                                        }
                                     }
                                 },
                                 "image/jpeg",
@@ -271,6 +279,7 @@ export default function StreamNode({
 
             ws.onerror = () => setIsStreaming(false);
             ws.onclose = () => {
+                if (pingInterval) clearInterval(pingInterval);
                 setNetState("reconnecting");
                 setIsStreaming(false);
                 if (rafId) cancelAnimationFrame(rafId);
@@ -284,6 +293,7 @@ export default function StreamNode({
             alive = false;
             if (rafId) cancelAnimationFrame(rafId);
             if (ws) ws.close();
+            // Interval clears on ws.onclose, but to be safe:
         };
     }, [isOwner, stream.id, videoEnabled]);
 
