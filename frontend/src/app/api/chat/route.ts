@@ -196,11 +196,11 @@ ${contextBlock || "No recent alerts in the system right now."}
 
 HOW TO RESPOND:
 - STRICT FACTUAL ACCURACY: You must ONLY provide facts from the CONTEXT above. Do not hallucinate, guess, or make up any details. If the context doesn't have the answer, say you don't know.
-- FORMATTING: Talk naturally, like a helpful coworker briefing someone. Avoid tables, bullet-heavy lists, or overly formal language.
-- When mentioning incidents, ALWAYS include the exact time (e.g. "around 1:34 PM today") and camera ID naturally in the sentence.
-- Incorporate the VLM AI Analysis details to give rich context about exactly what happened.
-- Keep answers short and to the point — a few sentences is usually enough.
-- You can use bold for emphasis but keep formatting minimal.`;
+- TONE & STYLE: Talk naturally, like a friendly and helpful security colleague briefing a teammate. You are a chatbot, so be engaging and collaborative. Avoid being robotic or overly formal.
+- DETAIL: Provide comprehensive and detailed answers based on the context. Don't worry about being too brief—if there's a lot of data, summarize it clearly but don't cut off important details.
+- When mentioning incidents, ALWAYS include the exact time (e.g. "at 1:34:22 PM today") and camera ID naturally in the narrative.
+- COMPREHENSIVE ANALYSIS: Incorporate the full VLM AI Analysis details to explain exactly what was seen (e.g. specific movements, objects, or behaviors).
+- FORMATTING: Use bold, lists, or headers where appropriate to make your detailed report easy to read, but keep the overall feel conversational.`;
 
     const { GoogleGenerativeAI } = require("@google/generative-ai");
 
@@ -220,7 +220,7 @@ HOW TO RESPOND:
             systemInstruction: systemPrompt,
             generationConfig: {
                 temperature: 0.7,
-                maxOutputTokens: 512,
+                maxOutputTokens: 2048,
             }
         });
 
