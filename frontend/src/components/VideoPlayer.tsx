@@ -262,7 +262,7 @@ export default function VideoPlayer({
             const hiddenVideo = document.createElement("video");
             hiddenVideo.crossOrigin = "anonymous";
             hiddenVideo.preload = "auto";
-            hiddenVideo.src = `${baseUrl}${videoUrl}`;
+            hiddenVideo.src = videoUrl.startsWith("http") ? videoUrl : `${baseUrl}${videoUrl}`;
             hiddenVideo.muted = true;
             hiddenVideo.playsInline = true;
 
@@ -579,15 +579,34 @@ export default function VideoPlayer({
 
             <video
                 ref={videoRef}
-                src={`${baseUrl}${videoUrl}`}
+                src={videoUrl.startsWith("http") ? videoUrl : `${baseUrl}${videoUrl}`}
                 controls
                 className="w-full h-full object-contain"
                 crossOrigin="anonymous"
                 onLoadStart={() => setVideoLoading(true)}
                 onCanPlay={() => setVideoLoading(false)}
-                onError={() => {
+                onError={(e) => {
+                    const video = e.currentTarget;
+                    const error = video.error;
+                    let message = "VIDEO BUFFER CORRUPTED OR UNSUPPORTED FORMAT.";
+
+                    if (error) {
+                        switch (error.code) {
+                            case 1: message = "MEDIA_ERR_ABORTED - FETCH ABORTED."; break;
+                            case 2: message = "MEDIA_ERR_NETWORK - NETWORK ERROR."; break;
+                            case 3: message = "MEDIA_ERR_DECODE - CORRUPTED BUFFER."; break;
+                            case 4: message = "MEDIA_ERR_SRC_NOT_SUPPORTED - FORMAT NOT SUPPORTED OR 404."; break;
+                        }
+                    }
+
+                    console.error("Video Load Error Detail:", {
+                        code: error?.code,
+                        message: error?.message,
+                        src: video.currentSrc || video.src
+                    });
+
                     setVideoLoading(false);
-                    setVideoError("VIDEO BUFFER CORRUPTED OR UNSUPPORTED FORMAT.");
+                    setVideoError(`${message}\nSRC: ${video.currentSrc || video.src}`);
                 }}
             />
             <canvas
