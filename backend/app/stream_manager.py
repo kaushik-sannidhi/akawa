@@ -709,13 +709,14 @@ class StreamManager:
         await asyncio.gather(*[_one(ws) for ws in viewers])
 
     async def _send_ws_text(self, targets, data_str: str, stream: Stream):
-        """Send text data to websocket viewer/publisher connections."""
-        for ws in targets:
+        """Send text data to websocket viewer/publisher connections concurrently."""
+        async def _one(ws):
             try:
                 await asyncio.wait_for(ws.send(data_str), timeout=1.0)
             except Exception:
                 stream.picows_viewers.discard(ws)
                 stream.picows_publishers.discard(ws)
+        await asyncio.gather(*[_one(ws) for ws in targets])
 
 
 stream_manager = StreamManager()
