@@ -202,45 +202,39 @@ HOW TO RESPOND:
 - Keep answers short and to the point — a few sentences is usually enough.
 - You can use bold for emphasis but keep formatting minimal.`;
 
-    const conversationText = messages
-        .map((m: any) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
-        .join("\n");
+    const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-    const fullPrompt = `${systemPrompt}\n\n${conversationText}\n\nAssistant:`;
-
-    // Call the Modal LLM with a timeout
+    // Call Gemini with a timeout
     try {
-        const modalResp = await fetch(MODAL_LLM_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                prompt: fullPrompt,
-                input_text: fullPrompt,
-                max_tokens: 512,
-                temperature: 0.7,
-            }),
-            signal: AbortSignal.timeout(120000), // 120s timeout for cold starts and large VLM context
-        });
-
-        if (!modalResp.ok) {
-            const errText = await modalResp.text().catch(() => "Unknown error");
+        const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+        if (!apiKey) {
             return Response.json(
-                { role: "assistant", content: `[LLM ERROR] Modal returned ${modalResp.status}: ${errText}` },
-                { status: 200 } // Return 200 so the frontend renders the error in chat
+                { role: "assistant", content: "[SYSTEM] Error: GEMINI_API_KEY is not set in environment." },
+                { status: 200 }
             );
         }
 
-        const data = await modalResp.json();
-        const rawText =
-            data.report || data.text || data.response || data.content || data.output || "";
-        const cleanText = cleanModalResponse(rawText);
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            systemInstruction: systemPrompt,
+            generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 512,
+            }
+        });
+
+        const geminiMessages = messages.map((m: any) => ({
+            role: m.role === "user" ? "user" : "model",
+            parts: [{ text: m.content }]
+        }));
+
+        const result = await model.generateContent({ contents: geminiMessages });
+        const cleanText = result.response.text();
 
         return Response.json({ role: "assistant", content: cleanText });
     } catch (err: any) {
-        const isTimeout = err.name === "TimeoutError" || err.name === "AbortError";
-        const errorMsg = isTimeout
-            ? "The AI model is currently under heavy load. Please try again in a moment."
-            : `Communication error: ${err.message}`;
+        const errorMsg = `Communication error: ${err.message}`;
 
         return Response.json(
             { role: "assistant", content: `[SYSTEM] ${errorMsg}` },

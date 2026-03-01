@@ -109,10 +109,8 @@ class Stream:
         self.latest_frame_b64: str = ""
         self.last_alert_event_ts: int = 0
 
-        # Cloudflare Calls session ID (used as meeting room)
-        self.cf_meeting_id: str = ""
-
         # Rolling frame buffer for sequence batching (capped at SEQUENCE_LENGTH)
+        # Stores (cv2_frame, jpeg_bytes_or_none)
         self._frame_buffer: deque = deque(maxlen=SEQUENCE_LENGTH)
 
         # Alert clipping
@@ -123,32 +121,30 @@ class Stream:
 
         self.viewer_wss: Set[WebSocket] = set()
         self.detection_wss: Set[WebSocket] = set()
+        self.picows_viewers: set = set()
+        self.picows_publishers: set = set()
 
         self._running = False
         self._ai_task = None
         self._capture_task = None
-        self._broadcast_task = None
-        self._active_count = 0  # Number of active viewers/listeners
+        self._active_count = 0  # Number of active connection listeners
         self._stop_timer = None
 
-    def push_frame(self, frame) -> bool:
+    def push_frame(self, frame, jpeg_bytes=None) -> bool:
         """
-        Append a cv2 frame to the rolling buffer.
+        Append a frame to the rolling buffer.
         Returns True when the buffer is full and a sequence is ready to send.
         """
-        self._frame_buffer.append(frame)
+        self._frame_buffer.append((frame, jpeg_bytes))
         return len(self._frame_buffer) >= SEQUENCE_LENGTH
 
     def drain_sequence(self) -> List:
         """
         Return the current buffer contents as a list and clear it.
-        Always returns SEQUENCE_LENGTH frames (padded with the last frame if needed).
+        Returns a list of (cv2_frame, jpeg_bytes_or_none)
         """
         frames = list(self._frame_buffer)
         self._frame_buffer.clear()
-        # Pad if somehow short (shouldn't happen in normal flow)
-        while len(frames) < SEQUENCE_LENGTH:
-            frames.append(frames[-1] if frames else np.zeros((480, 640, 3), dtype=np.uint8))
         return frames
 
     def to_dict(self):
@@ -160,10 +156,8 @@ class Stream:
             "uid": self.uid,
             "device_id": self.device_id,
             "status": self.status,
-            "subscriber_count": len(self.viewer_wss) + len(self.detection_wss),
-            "cf_meeting_id": self.cf_meeting_id,
+            "subscriber_count": len(self.detection_wss) + len(self.picows_viewers),
         }
-
 
 class StreamManager:
     def __init__(self):
@@ -172,25 +166,15 @@ class StreamManager:
     # ------------------------------------------------------------------ CRUD
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
                    model_id: str = "latest", device_id: str = "",
-                   stream_id: str = None, skip_ai: bool = False,
-                   cf_meeting_id: str = "") -> Stream:
+                   stream_id: str = None, skip_ai: bool = False) -> Stream:
         stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id)
-        stream.cf_meeting_id = cf_meeting_id
 
         self.streams[stream.id] = stream
         logger.info(f"====== NEW STREAM CREATED ======")
-        logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai} | CF Meeting: {bool(cf_meeting_id)}")
+        logger.info(f"ID: {stream.id} | Name: {name} | Type: {stream_type} | skip_ai: {skip_ai}")
 
         self._update_telemetry_nodes(uid)
-
-        if stream.type in ["rtsp", "server_cam"]:
-            stream.status = "standby"
-            # We don't start loops here; they start on viewer join
-
-        elif stream.type == "client_cam":
-            stream.status = "waiting_for_client"
-            # client_cam AI/broadcast loops are also managed lazily
-
+        stream.status = "waiting_for_client"
         return stream
 
     async def activate_stream(self, stream: Stream):
@@ -205,12 +189,13 @@ class StreamManager:
                 logger.info(f"Activating stream loops for: {stream.id}")
                 stream._running = True
                 stream.status = "active"
-                if stream.type in ["rtsp", "server_cam"]:
+                
+                # Start AI loop for all streams
+                stream._ai_task = asyncio.create_task(self._ai_loop(stream))
+                
+                # For server-side streams, also start the capture loop
+                if stream.type in ("rtsp", "server_cam"):
                     stream._capture_task = asyncio.create_task(self._capture_and_broadcast_loop(stream))
-                    stream._ai_task = asyncio.create_task(self._ai_loop(stream))
-                elif stream.type == "client_cam":
-                    stream._ai_task = asyncio.create_task(self._ai_loop(stream))
-                    stream._broadcast_task = asyncio.create_task(self._viewer_broadcast_loop(stream))
 
     async def deactivate_stream(self, stream: Stream):
         """Decrement active count and stop loops after a delay if no one is left."""
@@ -227,12 +212,13 @@ class StreamManager:
             logger.info(f"Deactivating stream loops (inactive): {stream.id}")
             stream._running = False
             stream.status = "standby"
-            for task in [stream._ai_task, stream._capture_task, stream._broadcast_task]:
-                if task:
-                    task.cancel()
-            stream._ai_task = None
-            stream._capture_task = None
-            stream._broadcast_task = None
+            if stream._ai_task:
+                stream._ai_task.cancel()
+                stream._ai_task = None
+            if stream._capture_task:
+                stream._capture_task.cancel()
+                stream._capture_task = None
+            
             # Clear memory-heavy fields
             stream.latest_frame_cv2 = None
             stream.latest_frame_b64 = ""
@@ -252,28 +238,34 @@ class StreamManager:
         stream = self.streams[stream_id]
         stream._running = False
 
-        for task in [stream._ai_task, stream._capture_task, stream._broadcast_task]:
-            if task:
-                task.cancel()
-
-        if stream.cf_meeting_id:
-            try:
-                from app.cloudflare_realtime import close_meeting
-                close_meeting(stream.cf_meeting_id)
-            except Exception as exc:
-                logger.error(f"Failed to close CF meeting {stream.cf_meeting_id}: {exc}")
+        if stream._ai_task:
+            stream._ai_task.cancel()
+        if stream._capture_task:
+            stream._capture_task.cancel()
 
         async def _safe_close(ws):
             try: await ws.close()
             except Exception: pass
 
-        for ws in list(stream.viewer_wss):
-            await _safe_close(ws)
-        stream.viewer_wss.clear()
-
         for ws in list(stream.detection_wss):
             await _safe_close(ws)
         stream.detection_wss.clear()
+
+        for t in list(stream.picows_viewers):
+            try:
+                t.send_close(1000)
+                t.disconnect()
+            except Exception:
+                pass
+        stream.picows_viewers.clear()
+        
+        for t in list(stream.picows_publishers):
+            try:
+                t.send_close(1000)
+                t.disconnect()
+            except Exception:
+                pass
+        stream.picows_publishers.clear()
 
         self.streams.pop(stream_id, None)
         logger.info(f"====== STREAM REMOVED: {stream_id} ======")
@@ -290,80 +282,87 @@ class StreamManager:
     def list_streams(self) -> List[Dict[str, Any]]:
         return [s.to_dict() for s in self.streams.values()]
 
-    # ------------------------------------------ Server-side capture (RTSP / server_cam)
+    # ------------------------------------------------------------------ Capture Loop (for RTSP)
     async def _capture_and_broadcast_loop(self, stream: Stream):
+        """
+        Background task for RTSP/Server streams.
+        Captures frames using OpenCV, broadcasts to viewers, and pushes to AI buffer.
+        """
+        from picows import WSMsgType
+        logger.info(f"[CAPTURE] Starting RTSP capture for {stream.id} source: {stream.source}")
+        
+        cap = None
         source = stream.source
-        if stream.type == "server_cam":
-            try:
-                source = int(source)
-            except ValueError:
-                pass
+        if source.isdigit(): source = int(source)
 
-        cap = cv2.VideoCapture(source)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        try:
+            # Use faster capture settings if it's RTSP
+            if isinstance(source, str) and (source.startswith("rtsp://") or source.startswith("http")):
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;udp"
+            
+            cap = cv2.VideoCapture(source)
+            if not cap.isOpened():
+                logger.error(f"[CAPTURE] Failed to open source {stream.source} for stream {stream.id}")
+                stream.status = "error"
+                return
 
-        while stream._running:
-            target_time = time.time() + 0.1
-            ret, frame = await asyncio.to_thread(cap.read)
+            # Target 15fps capture
+            last_frame_time = 0
+            frame_interval = 1.0 / 15.0
 
-            if not ret:
-                await asyncio.sleep(0.05)
-                continue
+            while stream._running:
+                now = time.time()
+                elapsed = now - last_frame_time
+                if elapsed < frame_interval:
+                    await asyncio.sleep(frame_interval - elapsed)
+                
+                ret, frame = await asyncio.to_thread(cap.read)
+                if not ret:
+                    logger.warning(f"[CAPTURE] Failed to read frame from {stream.id}, retrying...")
+                    await asyncio.sleep(2)
+                    cap.release()
+                    cap = cv2.VideoCapture(source)
+                    continue
+                
+                last_frame_time = time.time()
+                
+                # Resize for efficiency if too large
+                h, w = frame.shape[:2]
+                if w > 640:
+                    frame = cv2.resize(frame, (640, int(h * (640 / w))))
+                
+                # Encode to JPEG once for both broadcast and AI
+                ret, jpeg_buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+                if not ret: continue
+                jpeg_bytes = jpeg_buf.tobytes()
+                
+                # Store latest for legacy/internal use
+                stream.latest_frame_cv2 = frame
+                stream.push_frame(frame, jpeg_bytes)
+                
+                # Broadcast binary JPEG to all picows viewers
+                if stream.picows_viewers:
+                    bad = set()
+                    for t in stream.picows_viewers:
+                        try:
+                            t.send(WSMsgType.BINARY, jpeg_bytes)
+                        except Exception:
+                            bad.add(t)
+                    for t in bad:
+                        stream.picows_viewers.discard(t)
 
-            height, width = frame.shape[:2]
-            target_width = 640
-            if width > target_width:
-                scale = target_width / width
-                frame = cv2.resize(frame, (target_width, int(height * scale)))
-
-            stream.latest_frame_cv2 = frame
-            # Also push into the sequence buffer so the AI loop picks it up
-            stream.push_frame(frame)
-
-            ret_enc, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 65])
-            if ret_enc:
-                b64_frame = base64.b64encode(buffer).decode("utf-8")
-                stream.latest_frame_b64 = b64_frame
-                payload = {
-                    "type": "frame",
-                    "frame": b64_frame,
-                    "detections": stream.latest_detections,
-                    "threat_type": stream.latest_threat_type,
-                    "timestamp": int(time.time() * 1000),
-                }
-                self._broadcast_text(stream, json.dumps(payload))
-
-            wait_time = target_time - time.time()
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-
-    # ------------------------------------------ Viewer broadcast (client_cam legacy)
-    async def _viewer_broadcast_loop(self, stream: Stream):
-        while stream._running:
-            try:
-                if stream.latest_frame_b64 and stream.viewer_wss:
-                    payload = {
-                        "type": "frame",
-                        "frame": stream.latest_frame_b64,
-                        "detections": stream.latest_detections,
-                        "threat_type": stream.latest_threat_type,
-                        "timestamp": int(time.time() * 1000),
-                    }
-                    self._broadcast_text(stream, json.dumps(payload))
-                await asyncio.sleep(0.2)
-            except Exception as e:
-                logger.error(f"Viewer broadcast error: {e}")
-                await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"[CAPTURE] Error in capture loop for {stream.id}: {e}")
+            stream.status = "error"
+        finally:
+            if cap: cap.release()
+            logger.info(f"[CAPTURE] Stopped RTSP capture for {stream.id}")
 
     # ------------------------------------------------------------------ AI loop
     async def _ai_loop(self, stream: Stream):
         """
         Collects frames into SEQUENCE_LENGTH batches, sends them to the
         FastVision sequence endpoint, then broadcasts the result.
-
-        For client_cam streams: frames arrive via WebSocket and are pushed
-        into stream._frame_buffer externally (see push_frame()).
-        For rtsp/server_cam:    _capture_and_broadcast_loop pushes frames.
         """
         from main import proxy_fast_vision_sequence
         from app.telemetry import telemetry_service
@@ -377,14 +376,16 @@ class StreamManager:
                     await asyncio.sleep(0.02)
                     continue
 
-                frames = stream.drain_sequence()
+                # frames is List of (cv2_frame, jpeg_bytes_or_none)
+                frame_pairs = stream.drain_sequence()
+                cv2_frames = [fp[0] for fp in frame_pairs]
 
                 t0 = time.time()
                 # Call sequence API — passes stream.id so the Modal backend
                 # can maintain per-stream optical flow state across batches.
                 result = await asyncio.to_thread(
                     proxy_fast_vision_sequence,
-                    frames,
+                    cv2_frames,
                     stream.id,          # stream_id for server-side state
                     source_type="live",
                 )
@@ -399,20 +400,18 @@ class StreamManager:
                 stream.latest_detections  = detections
                 stream.latest_threat_type = threat_type
                 # Keep latest_frame_cv2 as the last frame of the sequence
-                # so _persist_live_alert_event can snapshot it
-                stream.latest_frame_cv2   = frames[-1]
+                stream.latest_frame_cv2   = cv2_frames[-1]
 
-                telemetry_service.log_frames(len(frames), stream.uid)
+                telemetry_service.log_frames(len(cv2_frames), stream.uid)
                 telemetry_service.log_latency(latency_ms, stream.uid)
 
                 if has_threat:
                     telemetry_service.log_anomaly(
                         f"NODE_WS_{stream.id[:6]}", stream.uid)
-                    await self._handle_threat(stream, frames[-1], result)
+                    await self._handle_threat(stream, cv2_frames[-1], result)
 
-                # Draw detections on the frame before tracking for alert clips
-                # so the boxes are "burnt in" to the recorded clip.
-                draw_frame = frames[-1].copy()
+                # Track alert window
+                draw_frame = cv2_frames[-1].copy()
                 _draw_detections(draw_frame, detections)
                 self._track_alert_window(stream, has_threat, draw_frame)
 
@@ -421,7 +420,6 @@ class StreamManager:
                     "detections": detections,
                     "per_frame_detections": per_frame_detections,
                     "threat_type": threat_type,
-                    # Pass through model confidence values for frontend debug overlay
                     "weapon_confidence": result.get("weapon_confidence", 0.0),
                     "violence_confidence": result.get("violence_confidence", 0.0),
                     "fall_confidence": result.get("fall_confidence", 0.0),
@@ -694,15 +692,35 @@ class StreamManager:
 
     # ---------------------------------------------------------- Broadcast helpers
     def _broadcast_detections(self, stream: Stream, data_str: str):
-        for ws_set in [stream.detection_wss, stream.viewer_wss]:
-            viewers = list(ws_set)
-            if viewers:
-                asyncio.create_task(self._send_all_text(viewers, data_str, ws_set))
-
-    def _broadcast_text(self, stream: Stream, data_str: str):
-        viewers = list(stream.viewer_wss)
+        viewers = list(stream.detection_wss)
         if viewers:
-            asyncio.create_task(self._send_all_text(viewers, data_str, stream.viewer_wss))
+            asyncio.create_task(self._send_all_text(viewers, data_str, stream.detection_wss))
+            
+        picows_viewers = list(stream.picows_viewers)
+        if picows_viewers:
+            from picows import WSMsgType
+            data_bytes = data_str.encode("utf-8")
+            bad = set()
+            for t in picows_viewers:
+                try:
+                    t.send(WSMsgType.TEXT, data_bytes)
+                except Exception:
+                    bad.add(t)
+            for t in bad:
+                stream.picows_viewers.discard(t)
+                
+        picows_publishers = list(getattr(stream, 'picows_publishers', set()))
+        if picows_publishers:
+            from picows import WSMsgType
+            data_bytes = data_str.encode("utf-8")
+            bad = set()
+            for t in picows_publishers:
+                try:
+                    t.send(WSMsgType.TEXT, data_bytes)
+                except Exception:
+                    bad.add(t)
+            for t in bad:
+                stream.picows_publishers.discard(t)
 
     async def _send_all_text(self, viewers, data_str: str, wss_set: Set[WebSocket]):
         async def _one(ws: WebSocket):

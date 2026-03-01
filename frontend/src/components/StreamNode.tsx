@@ -1,13 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Trash2, Wifi, WifiOff } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Trash2, Wifi, WifiOff, Mic, MicOff, Volume2, VolumeX, Camera, CameraOff } from "lucide-react";
 import { motion } from "framer-motion";
-import { getWsUrl } from "@/lib/config";
-import { requestRealtimeJoin, type RealtimeJoinRole } from "@/lib/cloudflare-calls";
-import { useRealtimeKitClient, useRealtimeKitMeeting, useRealtimeKitSelector } from "@cloudflare/realtimekit-react";
-import { RtkUiProvider } from "@cloudflare/realtimekit-react-ui";
-import { Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { getPicowsWsUrl } from "@/lib/config";
 
 interface StreamNodeProps {
     stream: any;
@@ -18,368 +14,6 @@ interface StreamNodeProps {
     isPrimary?: boolean;
 }
 
-const RTK_THEME_VARS: CSSProperties = {
-    "--rtk-font-family": "var(--font-mono)",
-    "--rtk-colors-brand-300": "255 255 255",
-    "--rtk-colors-brand-500": "255 51 0",
-    "--rtk-colors-background-1000": "0 0 0",
-    "--rtk-colors-background-900": "10 10 10",
-    "--rtk-colors-background-800": "18 18 18",
-    "--rtk-colors-background-700": "24 24 24",
-    "--rtk-colors-background-600": "51 51 51",
-    "--rtk-colors-text-1000": "255 255 255",
-    "--rtk-colors-text-700": "170 170 170",
-    "--rtk-border-radius-none": "0px",
-    "--rtk-border-radius-sm": "0px",
-    "--rtk-border-radius-md": "0px",
-    "--rtk-border-radius-lg": "0px",
-} as CSSProperties;
-
-function useClientCameraInferenceUploader(
-    streamId: string,
-    enabled: boolean,
-    meeting: any,
-    setIsStreaming: (value: boolean) => void,
-) {
-    const lastTrackIdRef = useRef<string>("");
-
-    useEffect(() => {
-        if (!enabled || !meeting) return;
-
-        let alive = true;
-        let ws: WebSocket | null = null;
-        let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-        let sendTimer: ReturnType<typeof setInterval> | null = null;
-
-        const hiddenVideo = document.createElement("video");
-        hiddenVideo.muted = true;
-        hiddenVideo.playsInline = true;
-        hiddenVideo.autoplay = true;
-
-        const canvas = document.createElement("canvas");
-        const ctx = canvas.getContext("2d");
-
-        const attachTrack = (track: MediaStreamTrack | null | undefined) => {
-            if (!track) return;
-            if (lastTrackIdRef.current === track.id) return;
-            lastTrackIdRef.current = track.id;
-            hiddenVideo.srcObject = new MediaStream([track]);
-            hiddenVideo.play().catch(() => { });
-        };
-
-        const sendFrame = async () => {
-            if (!ctx || !ws || ws.readyState !== WebSocket.OPEN) return;
-            const track = meeting?.self?.videoTrack as MediaStreamTrack | undefined;
-            if (!track) return;
-
-            attachTrack(track);
-            if (hiddenVideo.readyState < 2) return;
-
-            const videoWidth = hiddenVideo.videoWidth;
-            const videoHeight = hiddenVideo.videoHeight;
-            if (!videoWidth || !videoHeight) return;
-
-            const targetWidth = 480;
-            const targetHeight = Math.max(1, Math.round((targetWidth / videoWidth) * videoHeight));
-            canvas.width = targetWidth;
-            canvas.height = targetHeight;
-            ctx.drawImage(hiddenVideo, 0, 0, targetWidth, targetHeight);
-
-            const blob = await new Promise<Blob | null>((resolve) => {
-                canvas.toBlob((value) => resolve(value), "image/jpeg", 0.45);
-            });
-
-            if (blob && ws.readyState === WebSocket.OPEN) {
-                ws.send(blob);
-            }
-        };
-
-        const connect = () => {
-            const wsUrl = getWsUrl();
-            ws = new WebSocket(`${wsUrl}/ws/stream_in/${streamId}`);
-            ws.binaryType = "arraybuffer";
-
-            ws.onopen = () => {
-                setIsStreaming(true);
-                if (sendTimer) clearInterval(sendTimer);
-                sendTimer = setInterval(() => {
-                    void sendFrame();
-                }, 120);
-            };
-
-            ws.onclose = () => {
-                if (sendTimer) {
-                    clearInterval(sendTimer);
-                    sendTimer = null;
-                }
-                if (!alive) return;
-                reconnectTimer = setTimeout(connect, 3000);
-            };
-
-            ws.onerror = () => {
-                setIsStreaming(false);
-            };
-        };
-
-        connect();
-
-        return () => {
-            alive = false;
-            if (sendTimer) clearInterval(sendTimer);
-            if (reconnectTimer) clearTimeout(reconnectTimer);
-            ws?.close();
-            hiddenVideo.srcObject = null;
-        };
-    }, [enabled, meeting, setIsStreaming, streamId]);
-}
-
-function BrutalistControls({ isOwner }: { isOwner: boolean }) {
-    const { meeting } = useRealtimeKitMeeting();
-    const audioEnabled = useRealtimeKitSelector((m) => m.self.audioEnabled);
-    const videoEnabled = useRealtimeKitSelector((m) => m.self.videoEnabled);
-    const [viewerMuted, setViewerMuted] = useState(false);
-
-    useEffect(() => {
-        if (!isOwner) {
-            // Mute all remote audio tracks if viewerMuted is true
-            const participants = Array.from(meeting.participants.joined.values());
-            participants.forEach((p: any) => {
-                if (p.audioTrack) {
-                    p.audioTrack.enabled = !viewerMuted;
-                }
-            });
-        }
-    }, [viewerMuted, meeting.participants.joined, isOwner]);
-
-    if (isOwner) {
-        return (
-            <div className="absolute bottom-4 right-4 z-50 flex gap-2">
-                <button
-                    onClick={() => {
-                        if (audioEnabled) meeting.self.disableAudio();
-                        else meeting.self.enableAudio();
-                    }}
-                    className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${audioEnabled
-                            ? "border-[var(--color-data)] bg-[var(--color-data)] text-black hover:bg-white"
-                            : "border-[var(--color-alert)] bg-[var(--color-alert)] text-black hover:bg-white"
-                        }`}
-                >
-                    {audioEnabled ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
-                    {audioEnabled ? "MIC_ON" : "MIC_OFF"}
-                </button>
-                <button
-                    onClick={() => {
-                        if (videoEnabled) meeting.self.disableVideo();
-                        else meeting.self.enableVideo();
-                    }}
-                    className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${videoEnabled
-                            ? "border-[var(--color-silica)] bg-black text-white hover:border-white"
-                            : "border-[var(--color-iron)] bg-[var(--color-iron)] text-[var(--color-silica)]"
-                        }`}
-                >
-                    {videoEnabled ? "CAM_ON" : "CAM_OFF"}
-                </button>
-            </div>
-        );
-    }
-
-    // Viewer controls
-    return (
-        <div className="absolute bottom-4 right-4 z-50 flex gap-2">
-            <button
-                onClick={() => setViewerMuted(!viewerMuted)}
-                className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${!viewerMuted
-                        ? "border-[var(--color-data)] bg-[var(--color-data)] text-black hover:bg-white"
-                        : "border-[var(--color-alert)] bg-[var(--color-alert)] text-black hover:bg-white"
-                    }`}
-            >
-                {!viewerMuted ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
-                {!viewerMuted ? "AUDIO_ON" : "AUDIO_MUTED"}
-            </button>
-        </div>
-    );
-}
-
-function ParticipantVideo({ track, isLocal }: { track?: MediaStreamTrack; isLocal?: boolean }) {
-    const videoRef = useRef<HTMLVideoElement>(null);
-
-    useEffect(() => {
-        if (videoRef.current && track) {
-            const stream = new MediaStream([track]);
-            videoRef.current.srcObject = stream;
-        }
-    }, [track]);
-
-    return (
-        <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted={isLocal} // Always mute local video to prevent echo
-            className="w-full h-full object-cover bg-[#0a0a0a]"
-        />
-    );
-}
-
-function BrutalistGrid({ isOwner }: { isOwner: boolean }) {
-    const { meeting } = useRealtimeKitMeeting();
-    const selfVideoTrack = useRealtimeKitSelector((m) => m.self.videoTrack);
-    const participantsMap = useRealtimeKitSelector((m) => m.participants.joined);
-    const participants = Array.from(participantsMap.values());
-
-    // We prioritize showing the publisher's video
-    // If we are the owner, we show our own video.
-    // If we are a viewer, we show the publisher's video (first participant with video).
-
-    let activeTrack: MediaStreamTrack | undefined = undefined;
-    let isLocal = false;
-
-    if (isOwner && selfVideoTrack) {
-        activeTrack = selfVideoTrack;
-        isLocal = true;
-    } else if (participants.length > 0) {
-        const publisher = participants.find((p: any) => p.videoTrack);
-        if (publisher && publisher.videoTrack) {
-            activeTrack = publisher.videoTrack;
-        }
-    }
-
-    return (
-        <div className="absolute inset-0 z-0 bg-black">
-            {activeTrack ? (
-                <ParticipantVideo track={activeTrack} isLocal={isLocal} />
-            ) : (
-                <div className="w-full h-full flex flex-col items-center justify-center bg-[#0a0a0a]">
-                    <span className="text-[var(--color-iron)] text-[10px] font-bold tracking-widest animate-pulse">
-                        [ WAITING_FOR_VIDEO_STREAM ]
-                    </span>
-                </div>
-            )}
-        </div>
-    );
-}
-
-// Invisible audio consumers for viewer mode
-function ParticipantAudioConsumers() {
-    const { meeting } = useRealtimeKitMeeting();
-    const participantsMap = useRealtimeKitSelector((m) => m.participants.joined);
-    const participants = Array.from(participantsMap.values());
-
-    return (
-        <div className="hidden">
-            {participants.map((p: any) => {
-                if (!p.audioTrack) return null;
-                return <ParticipantVideo key={p.id} track={p.audioTrack} />; // Hack using video tag for audio to play
-            })}
-        </div>
-    );
-}
-
-function RealtimeClientView({
-    stream,
-    isOwner,
-    localDeviceId,
-    setVideoLoaded,
-    setIsStreaming,
-    setNetState,
-}: {
-    stream: any;
-    isOwner: boolean;
-    localDeviceId: string;
-    setVideoLoaded: (value: boolean) => void;
-    setIsStreaming: (value: boolean) => void;
-    setNetState: (value: string) => void;
-}) {
-    const [meeting, initMeeting] = useRealtimeKitClient();
-
-    useEffect(() => {
-        if (!stream?.id || !stream?.cf_meeting_id || !localDeviceId) return;
-
-        let alive = true;
-        let retryTimer: ReturnType<typeof setTimeout> | null = null;
-        let activeMeeting: any = null;
-
-        const role: RealtimeJoinRole = isOwner ? "publisher" : "viewer";
-
-        const join = async () => {
-            setNetState("connecting_rtk");
-            setIsStreaming(false);
-            try {
-                const joinData = await requestRealtimeJoin({
-                    streamId: stream.id,
-                    participantName: isOwner
-                        ? `${stream.name || "Camera"} Publisher`
-                        : `${stream.name || "Camera"} Viewer`,
-                    deviceId: localDeviceId,
-                    role,
-                });
-
-                const client = await initMeeting({
-                    authToken: joinData.authToken,
-                    defaults: {
-                        audio: isOwner,
-                        video: isOwner,
-                    },
-                });
-
-                if (!alive || !client) return;
-
-                activeMeeting = client;
-                await client.join();
-
-                if (!alive) return;
-
-                if (isOwner) {
-                    await client.self.enableVideo().catch(() => { });
-                    await client.self.enableAudio().catch(() => { });
-                } else {
-                    await client.self.disableVideo().catch(() => { });
-                    await client.self.disableAudio().catch(() => { });
-                }
-
-                setVideoLoaded(true);
-                setIsStreaming(true);
-                setNetState("streaming_rtk");
-            } catch (error) {
-                console.error("[RTK] Failed to join stream", stream.id, error);
-                setNetState("rtk_error");
-                setIsStreaming(false);
-                if (alive) {
-                    retryTimer = setTimeout(join, 5000);
-                }
-            }
-        };
-
-        void join();
-
-        return () => {
-            alive = false;
-            if (retryTimer) clearTimeout(retryTimer);
-            if (activeMeeting) {
-                activeMeeting.leave().catch(() => { });
-            }
-        };
-    }, [initMeeting, isOwner, localDeviceId, setIsStreaming, setNetState, setVideoLoaded, stream?.cf_meeting_id, stream?.id, stream?.name]);
-
-    useClientCameraInferenceUploader(stream.id, Boolean(meeting && isOwner), meeting, setIsStreaming);
-
-    if (!meeting) {
-        return <div className="absolute inset-0 z-10 bg-[#0a0a0a]" />;
-    }
-
-    return (
-        <div className="absolute inset-0 z-10 rtk-theme" style={RTK_THEME_VARS}>
-            <RtkUiProvider meeting={meeting as any}>
-                <div className="h-full w-full relative bg-black overflow-hidden">
-                    <BrutalistGrid isOwner={isOwner} />
-                    <BrutalistControls isOwner={isOwner} />
-                    {!isOwner && <ParticipantAudioConsumers />}
-                </div>
-            </RtkUiProvider>
-        </div>
-    );
-}
-
 export default function StreamNode({
     stream,
     onDelete,
@@ -388,21 +22,29 @@ export default function StreamNode({
     onDoubleClick,
     isPrimary = false,
 }: StreamNodeProps) {
-    const overlayRef = useRef<HTMLCanvasElement>(null);
-    const lastDetRef = useRef<string>("");
-    const lastDetectionsRaw = useRef<any[]>([]);
-    const weaponSeenStartRef = useRef<number | null>(null);
-    const pulsePhaseRef = useRef<number>(0);
-    const rafRef = useRef<number>(0);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const hiddenVideoRef = useRef<HTMLVideoElement>(null);
 
-    const [videoLoaded, setVideoLoaded] = useState(false);
     const [isStreaming, setIsStreaming] = useState(false);
     const [netState, setNetState] = useState("init");
-    const [fallbackFrame, setFallbackFrame] = useState("");
     const [localDeviceId, setLocalDeviceId] = useState("");
 
-    const isClientCam = stream.type === "client_cam";
-    const hasMeeting = Boolean(stream.cf_meeting_id);
+    const [videoEnabled, setVideoEnabled] = useState(true);
+    const [audioEnabled, setAudioEnabled] = useState(true);
+    const [viewerMuted, setViewerMuted] = useState(false);
+
+    const localStreamRef = useRef<MediaStream | null>(null);
+
+    // Pulse animation logic
+    const pulsePhaseRef = useRef<number>(0);
+    const rafRef = useRef<number>(0);
+    const lastDetectionsRaw = useRef<any[]>([]);
+    const weaponSeenStartRef = useRef<number | null>(null);
+
+    const isOwner = useMemo(
+        () => stream.device_id === localDeviceId && !!localDeviceId,
+        [localDeviceId, stream.device_id],
+    );
 
     useEffect(() => {
         let id = localStorage.getItem("device_id");
@@ -415,7 +57,10 @@ export default function StreamNode({
         const animate = (time: number) => {
             pulsePhaseRef.current = (time % 1000) / 1000;
             if (lastDetectionsRaw.current.length > 0) {
-                drawDetections(lastDetectionsRaw.current);
+                // Re-draw detections using the last known frame
+                // We rely on the received WebSocket frame actually keeping the canvas updated.
+                // Normally we'd composite, but here we can just draw them over the canvas.
+                // Wait, if we keep clearing canvas, it flashes pink. We only want to draw over the existing frame.
             }
             rafRef.current = requestAnimationFrame(animate);
         };
@@ -426,30 +71,31 @@ export default function StreamNode({
         };
     }, []);
 
-    const isOwner = useMemo(
-        () => isClientCam && stream.device_id === localDeviceId,
-        [isClientCam, localDeviceId, stream.device_id],
-    );
-
-    const drawDetections = useCallback((detections: any[]) => {
-        const canvas = overlayRef.current;
+    // Helper: Draw single frame
+    const drawFrameAndDetections = useCallback((imageBitmap?: ImageBitmap, detections?: any[]) => {
+        const canvas = canvasRef.current;
         if (!canvas) return;
-
-        const dw = canvas.clientWidth || 640;
-        const dh = canvas.clientHeight || 480;
-        if (canvas.width !== dw || canvas.height !== dh) {
-            canvas.width = dw;
-            canvas.height = dh;
-        }
 
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        ctx.clearRect(0, 0, dw, dh);
+        if (imageBitmap) {
+            canvas.width = imageBitmap.width;
+            canvas.height = imageBitmap.height;
+            ctx.drawImage(imageBitmap, 0, 0);
+        }
+
+        const dw = canvas.width;
+        const dh = canvas.height;
+
+        const currentDets = detections || lastDetectionsRaw.current;
+        if (detections) {
+            lastDetectionsRaw.current = detections;
+        }
 
         const phase = pulsePhaseRef.current;
         const pulseOpacity = 0.4 + 0.6 * (Math.sin(phase * Math.PI * 2) * 0.5 + 0.5);
-        const hasWeapon = detections.some(
+        const hasWeapon = currentDets.some(
             (d) =>
                 (d.detection_type === "weapon" || d.class_name === "gun" || d.class_name === "weapon") &&
                 d.confidence >= 0.45,
@@ -466,7 +112,7 @@ export default function StreamNode({
         const isPersistentWeapon =
             weaponSeenStartRef.current !== null && Date.now() - weaponSeenStartRef.current > 1000;
 
-        detections.forEach((det: any) => {
+        currentDets.forEach((det: any) => {
             const detType = det.detection_type ?? "";
             const isWeapon = detType === "weapon" || det.class_name === "gun" || det.class_name === "weapon";
             const isPerson = det.class_name === "person";
@@ -519,70 +165,171 @@ export default function StreamNode({
         });
     }, []);
 
+    // Owner logic: capture local camera and publish frames
+    useEffect(() => {
+        if (!isOwner) return;
+
+        let alive = true;
+        let ws: WebSocket | null = null;
+        let rafId: number | null = null;
+        let lastCaptureTime = 0;
+        const targetFps = 15;
+        const frameInterval = 1000 / targetFps;
+
+        const connectCamera = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } },
+                    audio: true,
+                });
+                if (!alive) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
+                }
+                localStreamRef.current = stream;
+                if (hiddenVideoRef.current) {
+                    hiddenVideoRef.current.srcObject = stream;
+                }
+            } catch (e) {
+                console.error("Failed to access camera:", e);
+                setNetState("camera_error");
+            }
+        };
+
+        const connectWebSocket = () => {
+            if (!alive) return;
+            setNetState("connecting_ws");
+            setIsStreaming(false);
+
+            const wsUrl = `${getPicowsWsUrl()}/ws/stream_in/${stream.id}`;
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = () => {
+                setNetState("streaming_picows");
+                setIsStreaming(true);
+
+                const captureCanvas = document.createElement("canvas");
+                const captureCtx = captureCanvas.getContext("2d", { alpha: false });
+
+                const publishLoop = (now: number) => {
+                    if (!alive) return;
+                    
+                    if (now - lastCaptureTime >= frameInterval) {
+                        const video = hiddenVideoRef.current;
+                        if (video && captureCtx && video.readyState >= 2 && videoEnabled) {
+                            captureCanvas.width = 640;
+                            captureCanvas.height = Math.max(1, Math.round((640 / video.videoWidth) * video.videoHeight));
+                            captureCtx.drawImage(video, 0, 0, captureCanvas.width, captureCanvas.height);
+
+                            captureCanvas.toBlob(
+                                (blob) => {
+                                    if (blob && ws?.readyState === WebSocket.OPEN) {
+                                        ws.send(blob);
+                                    }
+                                },
+                                "image/jpeg",
+                                0.5,
+                            );
+                            lastCaptureTime = now;
+                        }
+                    }
+                    rafId = requestAnimationFrame(publishLoop);
+                };
+                rafId = requestAnimationFrame(publishLoop);
+            };
+
+            ws.onerror = () => setIsStreaming(false);
+            ws.onclose = () => {
+                setNetState("reconnecting");
+                setIsStreaming(false);
+                if (rafId) cancelAnimationFrame(rafId);
+                if (alive) setTimeout(connectWebSocket, 3000);
+            };
+        };
+
+        void connectCamera().then(() => connectWebSocket());
+
+        return () => {
+            alive = false;
+            if (rafId) cancelAnimationFrame(rafId);
+            if (ws) ws.close();
+        };
+    }, [isOwner, stream.id, videoEnabled]);
+
+    // Viewer / Box receiving logic (Owner needs boxes too!)
     useEffect(() => {
         let alive = true;
         let ws: WebSocket | null = null;
-        let pingTimer: ReturnType<typeof setInterval> | null = null;
+        let pingInterval: ReturnType<typeof setInterval> | null = null;
 
-        const connect = () => {
+        const connectViewerWs = () => {
             if (!alive) return;
-            const wsUrl = getWsUrl();
-            const wsPath = isClientCam ? `${wsUrl}/ws/detections/${stream.id}` : `${wsUrl}/ws/stream_out/${stream.id}`;
 
-            ws = new WebSocket(wsPath);
-            ws.onopen = () => {
-                if (isClientCam) {
-                    pingTimer = setInterval(() => {
-                        if (ws?.readyState === WebSocket.OPEN) ws.send("ping");
-                    }, 25000);
+            const wsUrl = `${getPicowsWsUrl()}/ws/viewer/${stream.id}`;
+            ws = new WebSocket(wsUrl);
+            ws.binaryType = "blob";
+
+            ws.onopen = (e) => {
+                if (!isOwner) {
+                    setNetState("streaming_picows");
+                    setIsStreaming(true);
                 }
+                pingInterval = setInterval(() => {
+                    if (ws?.readyState === WebSocket.OPEN) ws.send("ping");
+                }, 20000);
             };
 
-            ws.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-
-                    if (data.type === "frame" && data.frame && !isClientCam) {
-                        setFallbackFrame(`data:image/jpeg;base64,${data.frame}`);
-                        setVideoLoaded(true);
-                        setIsStreaming(true);
-                    }
-
-                    if (data.detections) {
-                        const key = JSON.stringify(
-                            data.detections.map((d: any) => `${d.class_name}:${Number(d.confidence || 0).toFixed(2)}`),
-                        );
-                        if (key !== lastDetRef.current) {
-                            lastDetRef.current = key;
-                            lastDetectionsRaw.current = data.detections;
-                            drawDetections(data.detections);
-                            onDetections(data.detections, Number(data.timestamp || Date.now()));
+            ws.onmessage = async (event) => {
+                if (!alive) return;
+                if (typeof event.data === "string") {
+                    try {
+                        const payload = JSON.parse(event.data);
+                        if (payload.detections) {
+                            onDetections(payload.detections, Number(payload.timestamp || Date.now()));
+                            drawFrameAndDetections(undefined, payload.detections);
                         }
+                    } catch (e) {
+                        // ignore
                     }
-                } catch {
-                    // Ignore malformed websocket payloads.
+                } else {
+                    // Binary JPEG fast path
+                    if (isOwner) return; // Owner draws local video
+
+                    try {
+                        const imageBitmap = await createImageBitmap(event.data);
+                        drawFrameAndDetections(imageBitmap);
+                    } catch (e) {
+                        // decode error
+                    }
                 }
             };
 
             ws.onclose = () => {
-                if (pingTimer) {
-                    clearInterval(pingTimer);
-                    pingTimer = null;
+                if (pingInterval) clearInterval(pingInterval);
+                if (!isOwner) {
+                    setNetState("reconnecting");
+                    setIsStreaming(false);
                 }
-                if (alive) {
-                    setTimeout(connect, 3000);
-                }
+                if (alive) setTimeout(connectViewerWs, 3000);
             };
         };
 
-        connect();
+        connectViewerWs();
 
         return () => {
             alive = false;
-            if (pingTimer) clearInterval(pingTimer);
-            ws?.close();
+            if (ws) ws.close();
+            if (pingInterval) clearInterval(pingInterval);
         };
-    }, [drawDetections, isClientCam, onDetections, stream.id]);
+    }, [drawFrameAndDetections, isOwner, onDetections, stream.id]);
+
+    // Track toggling
+    useEffect(() => {
+        if (!localStreamRef.current) return;
+        localStreamRef.current.getVideoTracks().forEach((t) => (t.enabled = videoEnabled));
+        localStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = audioEnabled));
+    }, [videoEnabled, audioEnabled]);
 
     const handleDelete = (event: React.MouseEvent) => {
         event.stopPropagation();
@@ -603,8 +350,8 @@ export default function StreamNode({
                 onDoubleClick?.();
             }}
             className={`relative w-full h-full flex-1 min-h-0 bg-[#0A0A0A] flex flex-col group cursor-pointer origin-center border-[2px] overflow-hidden ${isPrimary
-                    ? "border-[var(--color-data)]"
-                    : "border-[var(--color-dim)] hover:border-[var(--color-iron)]"
+                ? "border-[var(--color-data)]"
+                : "border-[var(--color-dim)] hover:border-[var(--color-iron)]"
                 }`}
         >
             <div className="p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent absolute top-0 left-0 w-full">
@@ -612,17 +359,15 @@ export default function StreamNode({
                     className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"
                         } border-[1px] border-[var(--color-iron)] truncate max-w-[180px] whitespace-nowrap`}
                 >
-                    {stream.name} [{String(stream.type || "UNKNOWN").toUpperCase()}]
+                    {stream.name} [PICOWS_NODE]
                 </span>
                 <div className="flex gap-1">
-                    {isClientCam && (
-                        <span
-                            className={`bg-black px-1 border border-[var(--color-iron)] flex items-center ${isStreaming ? "text-[var(--color-data)]" : "text-[#555]"
-                                }`}
-                        >
-                            {isStreaming ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
-                        </span>
-                    )}
+                    <span
+                        className={`bg-black px-1 border border-[var(--color-iron)] flex items-center ${isStreaming ? "text-[var(--color-data)]" : "text-[#555]"
+                            }`}
+                    >
+                        {isStreaming ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                    </span>
                     <span
                         className={`bg-black px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"
                             } border-[1px] border-[var(--color-iron)] ${isStreaming ? "text-[var(--color-alert)] animate-pulse" : "text-[#333]"
@@ -632,7 +377,7 @@ export default function StreamNode({
                     </span>
                     <button
                         onClick={handleDelete}
-                        className="bg-black text-[var(--color-iron)] hover:text-red-500 hover:border-red-500 border border-[var(--color-iron)] px-1"
+                        className="bg-black text-[var(--color-iron)] hover:text-red-500 hover:border-red-500 border border-[var(--color-iron)] px-1 relative z-50 pointer-events-auto"
                     >
                         <Trash2 className="w-3 h-3" />
                     </button>
@@ -640,7 +385,7 @@ export default function StreamNode({
             </div>
 
             <div className="relative flex-1 w-full h-full flex items-center justify-center overflow-hidden">
-                {!videoLoaded && (
+                {!isStreaming && (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0d0d0d] z-30">
                         <div className="flex gap-1 mb-4">
                             {[0, 1, 2].map((i) => (
@@ -658,33 +403,57 @@ export default function StreamNode({
                     </div>
                 )}
 
-                {isClientCam && hasMeeting && localDeviceId && (
-                    <RealtimeClientView
-                        stream={stream}
-                        isOwner={isOwner}
-                        localDeviceId={localDeviceId}
-                        setVideoLoaded={setVideoLoaded}
-                        setIsStreaming={setIsStreaming}
-                        setNetState={setNetState}
+                {/* For Publisher, we show the local video directly under the canvas for zero latency */}
+                {isOwner && (
+                    <video
+                        ref={hiddenVideoRef}
+                        muted
+                        autoPlay
+                        playsInline
+                        className="absolute inset-0 w-full h-full object-cover z-10"
                     />
                 )}
 
-                {isClientCam && !hasMeeting && (
-                    <div className="absolute inset-0 z-10 flex items-center justify-center text-[10px] text-[var(--color-silica)] bg-black">
-                        REALTIME_MEETING_NOT_CONFIGURED
-                    </div>
-                )}
+                <canvas ref={canvasRef} className="absolute inset-0 w-full h-full object-cover z-20 pointer-events-none" />
 
-                {!isClientCam && fallbackFrame && (
-                    <img
-                        src={fallbackFrame}
-                        alt="Stream"
-                        className="absolute inset-0 h-full w-full object-cover z-10"
-                        onLoad={() => setVideoLoaded(true)}
-                    />
-                )}
-
-                <canvas ref={overlayRef} className="absolute inset-0 w-full h-full z-20 pointer-events-none" />
+                {/* Controls Overlay */}
+                <div className="absolute bottom-4 right-4 z-50 flex gap-2 pointer-events-auto">
+                    {isOwner ? (
+                        <>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setAudioEnabled(!audioEnabled); }}
+                                className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${audioEnabled
+                                    ? "border-[var(--color-data)] bg-[var(--color-data)] text-black hover:bg-white"
+                                    : "border-[var(--color-alert)] bg-[var(--color-alert)] text-black hover:bg-white"
+                                    }`}
+                            >
+                                {audioEnabled ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                                {audioEnabled ? "MIC_ON" : "MIC_OFF"}
+                            </button>
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setVideoEnabled(!videoEnabled); }}
+                                className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${videoEnabled
+                                    ? "border-[var(--color-silica)] bg-black text-white hover:border-white"
+                                    : "border-[var(--color-iron)] bg-[var(--color-iron)] text-[var(--color-silica)]"
+                                    }`}
+                            >
+                                {videoEnabled ? <Camera className="w-3 h-3" /> : <CameraOff className="w-3 h-3" />}
+                                {videoEnabled ? "CAM_ON" : "CAM_OFF"}
+                            </button>
+                        </>
+                    ) : (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); setViewerMuted(!viewerMuted); }}
+                            className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${!viewerMuted
+                                ? "border-[var(--color-data)] bg-[var(--color-data)] text-black hover:bg-white"
+                                : "border-[var(--color-alert)] bg-[var(--color-alert)] text-black hover:bg-white"
+                                }`}
+                        >
+                            {!viewerMuted ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+                            {!viewerMuted ? "VOL_ON" : "VOL_MUTED"}
+                        </button>
+                    )}
+                </div>
             </div>
         </motion.div>
     );

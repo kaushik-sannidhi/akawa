@@ -12,6 +12,18 @@ export function getWsUrl() {
     return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 }
 
+export function getPicowsWsUrl() {
+    const base = getWsUrl();
+    try {
+        const url = new URL(base);
+        // Swap port to 9001 for picows
+        url.port = "9001";
+        return url.toString().replace(/\/$/, "");
+    } catch {
+        return base;
+    }
+}
+
 export async function resolveBaseUrl(url: string | number): Promise<string> {
     if (typeof url === "number") {
         const base = getBaseUrl();

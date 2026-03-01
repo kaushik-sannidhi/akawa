@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Camera, Monitor, Globe, X, Video } from "lucide-react";
+import { Camera, X, Video } from "lucide-react";
 import { getBaseUrl } from "@/lib/config";
 import { useAuth } from "@/context/AuthContext";
 
@@ -14,46 +14,39 @@ interface StreamDialogProps {
 export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamDialogProps) {
     const { user } = useAuth();
     const [name, setName] = useState("");
-    const [streamType, setStreamType] = useState<"rtsp" | "server_cam" | "client_cam">("client_cam");
-    const [source, setSource] = useState("0");
+    const [sourceType, setSourceType] = useState<"client_cam" | "rtsp">("client_cam");
+    const [source, setSource] = useState("");
     const [loading, setLoading] = useState(false);
     const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
     const previewRef = useRef<HTMLVideoElement>(null);
     const previewStreamRef = useRef<MediaStream | null>(null);
 
     useEffect(() => {
-        if (streamType === "client_cam") {
-            const getDevices = async () => {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                    stream.getTracks().forEach(t => t.stop());
-                    const devs = await navigator.mediaDevices.enumerateDevices();
-                    const videoDevs = devs.filter(d => d.kind === "videoinput");
-                    setDevices(videoDevs);
-                    if (videoDevs.length > 0) setSource(videoDevs[0].deviceId);
-                    else setSource("local");
-                } catch (err) {
-                    console.error("Failed to list devices", err);
-                    setSource("local");
-                }
-            };
-            getDevices();
-        } else if (streamType === "server_cam") {
-            setSource("0");
-        } else {
-            setSource("");
-        }
-    }, [streamType]);
+        if (!isOpen) return;
+        const getDevices = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                stream.getTracks().forEach(t => t.stop());
+                const devs = await navigator.mediaDevices.enumerateDevices();
+                const videoDevs = devs.filter(d => d.kind === "videoinput");
+                setDevices(videoDevs);
+                if (videoDevs.length > 0 && sourceType === "client_cam") setSource(videoDevs[0].deviceId);
+            } catch (err) {
+                console.error("Failed to list devices", err);
+            }
+        };
+        getDevices();
+    }, [isOpen, sourceType]);
 
     // Camera preview
     useEffect(() => {
-        if (!isOpen || streamType !== "client_cam" || !source) {
+        if (!isOpen || !source || sourceType !== "client_cam") {
             stopPreview();
             return;
         }
         startPreview(source);
         return () => stopPreview();
-    }, [isOpen, streamType, source]);
+    }, [isOpen, source, sourceType]);
 
     const startPreview = async (deviceId: string) => {
         stopPreview();
@@ -66,7 +59,7 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
             previewStreamRef.current = ms;
             if (previewRef.current) {
                 previewRef.current.srcObject = ms;
-                previewRef.current.play().catch(() => {});
+                previewRef.current.play().catch(() => { });
             }
         } catch (err) {
             console.warn("[Preview] Could not start camera preview:", err);
@@ -109,7 +102,7 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     name,
-                    stream_type: streamType,
+                    stream_type: sourceType,
                     source,
                     uid,
                     model_id: "latest",
@@ -139,7 +132,7 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
         <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-3 sm:p-4">
             <div className="bg-[#0A0A0A] border-[2px] border-[var(--color-iron)] p-4 sm:p-6 w-full max-w-md font-mono uppercase text-white shadow-[8px_8px_0_var(--color-iron)] max-h-[90dvh] overflow-y-auto">
                 <div className="flex justify-between items-center mb-6">
-                    <h2 className="font-bold text-lg border-b-[2px] border-white pb-1">[ DEPLOY_NEW_SENSOR ]</h2>
+                    <h2 className="font-bold text-lg border-b-[2px] border-white pb-1">[ DEPLOY_RTK_SENSOR ]</h2>
                     <button onClick={handleClose} className="hover:text-[var(--color-alert)] p-1">
                         <X className="w-6 h-6" />
                     </button>
@@ -159,28 +152,30 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                     </div>
 
                     <div className="flex flex-col gap-1">
-                        <label className="text-[10px] font-bold text-[var(--color-silica)]">SENSOR_TOPOLOGY</label>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                            <button type="button" onClick={() => setStreamType("client_cam")}
-                                className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "client_cam" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}>
-                                <Camera className="w-5 h-5" /> LOCAL_DEVICE
+                        <label className="text-[10px] font-bold text-[var(--color-silica)]">SENSOR_TYPE</label>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setSourceType("client_cam")}
+                                className={`p-2 border-[2px] text-[10px] font-bold transition-all ${sourceType === "client_cam" ? "border-[var(--color-data)] bg-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-white"}`}
+                            >
+                                WEB_BROWSER_CAM
                             </button>
-                            <button type="button" onClick={() => setStreamType("server_cam")}
-                                className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "server_cam" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}>
-                                <Monitor className="w-5 h-5" /> SERVER_CAM
-                            </button>
-                            <button type="button" onClick={() => setStreamType("rtsp")}
-                                className={`p-2 border-[2px] text-[10px] font-bold flex flex-col items-center gap-2 ${streamType === "rtsp" ? "bg-[var(--color-data)] border-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-[var(--color-silica)] bg-black"}`}>
-                                <Globe className="w-5 h-5" /> RTSP_IP_CAM
+                            <button
+                                type="button"
+                                onClick={() => setSourceType("rtsp")}
+                                className={`p-2 border-[2px] text-[10px] font-bold transition-all ${sourceType === "rtsp" ? "border-[var(--color-data)] bg-[var(--color-data)] text-black" : "border-[var(--color-iron)] hover:border-white"}`}
+                            >
+                                RTSP_SERVER_CAM
                             </button>
                         </div>
                     </div>
 
                     <div className="flex flex-col gap-1">
                         <label className="text-[10px] font-bold text-[var(--color-silica)]">
-                            {streamType === "client_cam" ? "SELECT_DEVICE" : "URI_OR_INDEX"}
+                            {sourceType === "client_cam" ? "SELECT_HARDWARE_SOURCE" : "RTSP_SOURCE_URL"}
                         </label>
-                        {streamType === "client_cam" ? (
+                        {sourceType === "client_cam" ? (
                             <select
                                 required
                                 value={source}
@@ -200,14 +195,13 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                                 required
                                 value={source}
                                 onChange={e => setSource(e.target.value)}
-                                placeholder={streamType === "server_cam" ? "0" : "rtsp://..."}
-                                className="bg-black border-[2px] border-[var(--color-iron)] p-2 text-white outline-none focus:border-[var(--color-data)]"
+                                placeholder="rtsp://admin:pass@192.168.1.50:554/stream"
+                                className="bg-black border-[2px] border-[var(--color-iron)] p-2 text-white focus:border-[var(--color-data)] outline-none text-[10px]"
                             />
                         )}
                     </div>
 
-                    {/* Camera preview */}
-                    {streamType === "client_cam" && (
+                    {sourceType === "client_cam" && (
                         <div className="flex flex-col gap-1">
                             <label className="text-[10px] font-bold text-[var(--color-silica)] flex items-center gap-1">
                                 <Video className="w-3 h-3" /> LIVE_PREVIEW
@@ -227,27 +221,27 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                         </div>
                     )}
 
-                    {streamType === "client_cam" && (
-                        <div className="border border-[var(--color-iron)]/50 bg-[var(--color-data)]/5 p-2 text-[9px] text-[var(--color-data)]">
-                            CLOUDFLARE REALTIMEKIT - LOW LATENCY STREAMING
-                            <br />
-                            ANY SIGNED-IN DEVICE CAN VIEW THIS STREAM IN REAL-TIME.
-                            AI INFERENCE RUNS ON ALL LIVE STREAMS.
-                        </div>
-                    )}
+                    <div className="border border-[var(--color-iron)]/50 bg-[var(--color-data)]/5 p-2 text-[9px] text-[var(--color-data)] mt-2">
+                        {sourceType === "client_cam" 
+                            ? "PICOWS WEBSOCKET - ULTRA LOW LATENCY STREAMING. BROWSER WILL ENCODE AND PUBLISH TO SERVER."
+                            : "SERVER CAPTURE - THE BACKEND WILL CAPTURE RTSP AND BROADCAST TO ALL VIEWERS VIA PICOWS."}
+                        <br />
+                        AI INFERENCE RUNS AUTOMATICALLY FOR ALL ACTIVE STREAMS.
+                    </div>
 
                     <button
                         type="submit"
                         disabled={loading}
                         className="mt-4 p-3 bg-white text-black font-bold border-[2px] border-white hover:bg-black hover:text-white transition-colors disabled:opacity-50"
                     >
-                        {loading ? "INITIALIZING_REALTIME_SESSION..." : "[ ACTIVATE_NODE ]"}
+                        {loading ? "INITIALIZING_REALTIME_LINK..." : "[ ACTIVATE_NODE ]"}
                     </button>
                 </form>
             </div>
         </div>
     );
 }
+
 
 
 
