@@ -54,6 +54,7 @@ default_origins = [
     "https://itsakawa.tech",
     "https://www.itsakawa.tech",
     "https://akawa.vercel.app",
+    "https://akawa.ingeniumstem.org",
     "https://akawa.onrender.com",
     "https://server.itsakawa.tech",
     "https://server.itsakawa.tech"
