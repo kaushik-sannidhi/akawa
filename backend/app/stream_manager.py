@@ -162,9 +162,6 @@ class Stream:
             "status": self.status,
             "subscriber_count": len(self.viewer_wss) + len(self.detection_wss),
             "cf_meeting_id": self.cf_meeting_id,
-            "calls_session_id": self.calls_session_id,
-            "whip_url": self.whip_url,
-            "whep_url": self.whep_url,
         }
 
 
@@ -176,15 +173,9 @@ class StreamManager:
     def add_stream(self, name: str, stream_type: str, source: str, uid: str,
                    model_id: str = "latest", device_id: str = "",
                    stream_id: str = None, skip_ai: bool = False,
-                   cf_meeting_id: str = "",
-                   calls_session_id: str = "",
-                   whip_url: str = "",
-                   whep_url: str = "") -> Stream:
+                   cf_meeting_id: str = "") -> Stream:
         stream = Stream(name, stream_type, source, uid, model_id, device_id, stream_id)
         stream.cf_meeting_id = cf_meeting_id
-        stream.calls_session_id = calls_session_id
-        stream.whip_url = whip_url
-        stream.whep_url = whep_url
 
         self.streams[stream.id] = stream
         logger.info(f"====== NEW STREAM CREATED ======")
@@ -263,7 +254,7 @@ class StreamManager:
 
         for task in [stream._ai_task, stream._capture_task, stream._broadcast_task]:
             if task:
-                task.cancel()
+                task.cancel()a
 
         if stream.cf_meeting_id:
             try:
