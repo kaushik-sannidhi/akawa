@@ -123,8 +123,8 @@ export default function ReportsPage() {
                         [ INCIDENT_REPORTS ]
                     </span>
                     <div className={`px-2 py-1 text-[10px] font-bold border flex items-center gap-2 flex-shrink-0 ${filteredReports.length > 0
-                            ? "border-[var(--color-alert)] text-[var(--color-alert)] bg-[var(--color-alert)]/10"
-                            : "border-[var(--color-iron)] text-[var(--color-silica)]"
+                        ? "border-[var(--color-alert)] text-[var(--color-alert)] bg-[var(--color-alert)]/10"
+                        : "border-[var(--color-iron)] text-[var(--color-silica)]"
                         }`}>
                         {filteredReports.length} REPORTS
                     </div>
@@ -132,32 +132,16 @@ export default function ReportsPage() {
 
                 <div className="flex items-center gap-2 sm:gap-3">
                     {/* Filter dropdown */}
-                    <div className="relative">
-                        <button
-                            onClick={() => setFilterOpen(!filterOpen)}
-                            className="flex items-center gap-1 px-2 py-1.5 border border-[var(--color-iron)] hover:border-[var(--color-data)] text-[10px] text-[var(--color-silica)] hover:text-[var(--color-data)] transition-none"
-                        >
-                            <Filter className="w-3 h-3" />
-                            <span className="hidden sm:inline">{filterType === "all" ? "ALL" : filterType.toUpperCase()}</span>
-                            <ChevronDown className="w-3 h-3" />
-                        </button>
-                        {filterOpen && (
-                            <>
-                                <div className="fixed inset-0 z-30" onClick={() => setFilterOpen(false)} />
-                                <div className="absolute right-0 top-full mt-1 z-40 border-[2px] border-[var(--color-iron)] bg-black min-w-[140px]">
-                                    {[{ key: "all", label: "ALL TYPES" }, { key: "weapon", label: "WEAPON" }, { key: "violence", label: "VIOLENCE" }, { key: "fall", label: "FALL / MED" }].map(opt => (
-                                        <button
-                                            key={opt.key}
-                                            onClick={() => { setFilterType(opt.key); setFilterOpen(false); }}
-                                            className={`w-full text-left px-3 py-2 text-[10px] border-b border-[var(--color-iron)] last:border-b-0 ${filterType === opt.key ? "bg-[var(--color-data)] text-black" : "text-[var(--color-silica)] hover:text-white hover:bg-[var(--color-dim)]"}`}
-                                        >
-                                            {opt.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </>
-                        )}
-                    </div>
+                    <select
+                        value={filterType}
+                        onChange={(e) => setFilterType(e.target.value)}
+                        className="bg-black text-[var(--color-silica)] hover:text-[var(--color-data)] border border-[var(--color-iron)] hover:border-[var(--color-data)] p-1.5 text-[10px] outline-none cursor-pointer uppercase transition-none"
+                    >
+                        <option value="all">ALL TYPES</option>
+                        <option value="weapon">WEAPON</option>
+                        <option value="violence">VIOLENCE</option>
+                        <option value="fall">FALL / MED</option>
+                    </select>
 
                     <button
                         onClick={() => { setLoading(true); fetchReports(); }}

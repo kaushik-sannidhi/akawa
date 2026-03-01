@@ -28,8 +28,9 @@
     "peerjs": "^1.5.5",
     "react": "19.2.3",
     "react-dom": "19.2.3",
+    "react-markdown": "^10.1.0",
     "tailwind-merge": "^3.5.0",
-    "vercel": "^50.25.3"
+    "vercel": "^50.25.4"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

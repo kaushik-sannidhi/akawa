@@ -3,6 +3,7 @@
 import { Terminal, Send, X, RefreshCw } from 'lucide-react';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
 
 interface Message {
     role: "user" | "assistant";
@@ -147,7 +148,13 @@ export default function SecurityCopilotChat() {
                                         [{m.role === 'user' ? 'OPERATOR' : 'SEC_COPILOT'}]
                                     </div>
                                     <div className={`max-w-[85%] p-3 text-sm border-l-2 font-sans ${m.role === 'user' ? 'bg-[var(--color-void)] border-[var(--color-data)] text-white' : 'bg-[var(--color-dim)] border-[var(--color-iron)] text-[var(--color-silica)]'}`}>
-                                        <div className="whitespace-pre-wrap">{m.content}</div>
+                                        {m.role === 'assistant' ? (
+                                            <div className="copilot-markdown">
+                                                <ReactMarkdown>{m.content}</ReactMarkdown>
+                                            </div>
+                                        ) : (
+                                            <div className="whitespace-pre-wrap">{m.content}</div>
+                                        )}
                                     </div>
                                 </div>
                             ))}
