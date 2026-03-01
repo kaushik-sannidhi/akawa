@@ -25,12 +25,17 @@ const makeReportTitle = (threatType: "weapon" | "violence" | "fall", sourceLabel
     return `Weapon Detected - ${sourceLabel}`;
 };
 
-const blobToBase64 = async (blob?: Blob | null): Promise<string> => {
-    if (!blob) return "";
-    const buffer = await blob.arrayBuffer();
-    return btoa(
-        new Uint8Array(buffer).reduce((acc, byte) => acc + String.fromCharCode(byte), "")
-    );
+const blobToBase64 = (blob?: Blob | null): Promise<string> => {
+    if (!blob) return Promise.resolve("");
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const result = reader.result as string;
+            resolve(result.split(",")[1] || "");
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
 };
 
 export default function UploadAnalysisPage() {

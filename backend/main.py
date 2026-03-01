@@ -195,9 +195,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = "uploads"
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-LIVE_EVENTS_DIR = "live_events"
+LIVE_EVENTS_DIR = os.path.join(ROOT_DIR, "live_events")
 os.makedirs(LIVE_EVENTS_DIR, exist_ok=True)
 
 FIREBASE_RTDB_BASE = "https://uiuc-24fae-default-rtdb.firebaseio.com"
@@ -599,39 +600,60 @@ def health_check():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _transcode_video(input_path: str, output_path: str):
-    subprocess.run(
-        ["ffmpeg", "-i", input_path,
-         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
-         "-y", output_path],
-        capture_output=True, check=True,
-    )
+    """
+    Primary transcoder using ffmpeg (H.264/AAC).
+    """
+    logger.info(f"Starting ffmpeg transcode: {input_path} -> {output_path}")
+    cmd = [
+        "ffmpeg", "-i", input_path,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",  # Enable fast start for web streaming
+        "-y", output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"ffmpeg failed: {result.stderr}")
+        raise RuntimeError(f"ffmpeg transcode failed: {result.stderr}")
 
 
 def _transcode_video_opencv(input_path: str, output_path: str):
     """
-    Fallback transcoder when ffmpeg is unavailable in the runtime.
-    Produces H.264-compatible-ish MP4 (video only) for browser playback.
+    Fallback transcoder when ffmpeg is unavailable.
+    Note: OpenCV's 'mp4v' is often NOT supported in Chrome/Safari without H.264.
+    If 'avc1' is unavailable, this may still fail playback.
     """
+    logger.info(f"Starting OpenCV fallback transcode: {input_path} -> {output_path}")
     cap = cv2.VideoCapture(input_path)
     if not cap.isOpened():
-        raise RuntimeError("OpenCV failed to open uploaded video")
+        raise RuntimeError("OpenCV failed to open video source")
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if not fps or fps <= 0 or fps > 240:
-        fps = 25.0
-
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if width <= 0 or height <= 0:
-        cap.release()
-        raise RuntimeError("OpenCV could not read video resolution")
+    
+    # Try different codecs in order of preference
+    codecs = ["avc1", "mp4v", "X264"]
+    writer = None
+    used_codec = None
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-    if not writer.isOpened():
+    for codec in codecs:
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*codec)
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            if writer.isOpened():
+                used_codec = codec
+                logger.info(f"OpenCV using codec: {codec}")
+                break
+            else:
+                writer.release()
+                writer = None
+        except Exception as e:
+            logger.warning(f"Failed to init OpenCV codec {codec}: {e}")
+
+    if not writer:
         cap.release()
-        raise RuntimeError("OpenCV VideoWriter failed to initialize")
+        raise RuntimeError("OpenCV could not initialize any VideoWriter codec")
 
     frames_written = 0
     try:
@@ -646,7 +668,11 @@ def _transcode_video_opencv(input_path: str, output_path: str):
         writer.release()
 
     if frames_written == 0:
-        raise RuntimeError("OpenCV fallback wrote zero frames")
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        raise RuntimeError("OpenCV transcode wrote zero frames")
+    
+    logger.info(f"OpenCV transcode complete ({frames_written} frames), codec={used_codec}")
 
 
 async def _write_upload_to_disk(upload: UploadFile, target_path: str, chunk_size: int = 4 * 1024 * 1024):
@@ -740,6 +766,7 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
     Analyse an uploaded video server-side via SSE.
     Sends batches of SEQUENCE_LENGTH frames to the Modal sequence endpoint.
     """
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
     matching = [f for f in os.listdir(UPLOAD_DIR) if f.startswith(video_id)]
     if not matching:
         raise HTTPException(status_code=404, detail="Video not found")
@@ -751,92 +778,100 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
     BATCH_SIZE = SEQUENCE_LENGTH   # keep in sync with stream_manager
 
     async def generate():
-        def _get_cap_info():
-            cap         = cv2.VideoCapture(file_path)
-            if not cap.isOpened():
-                raise RuntimeError("Failed to open uploaded video for analysis")
-            fps         = cap.get(cv2.CAP_PROP_FPS) or 30
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            return cap, fps, total_frames
+        cap = None
+        try:
+            def _get_cap_info():
+                c = cv2.VideoCapture(file_path)
+                if not c.isOpened():
+                    raise RuntimeError(f"Failed to open video: {file_path}")
+                f = c.get(cv2.CAP_PROP_FPS) or 30
+                tf = int(c.get(cv2.CAP_PROP_FRAME_COUNT))
+                return c, f, tf
 
-        cap, fps, total_frames = await anyio.to_thread.run_sync(_get_cap_info)
-        sample_interval = max(1, int(fps / 10))
-        total_samples   = (total_frames + sample_interval - 1) // sample_interval if total_frames > 0 else 0
+            cap, fps, total_frames = await anyio.to_thread.run_sync(_get_cap_info)
+            sample_interval = max(1, int(fps / 10))
+            total_samples   = (total_frames + sample_interval - 1) // sample_interval if total_frames > 0 else 0
 
-        yield f"data: {json.dumps({'type': 'start', 'total_frames': total_frames, 'total_samples': total_samples, 'fps': fps})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'total_frames': total_frames, 'total_samples': total_samples, 'fps': fps})}\n\n"
 
-        frame_idx      = 0
-        sample_count   = 0
-        batch_frames   = []
-        batch_timestamps = []
+            frame_idx      = 0
+            sample_count   = 0
+            batch_frames   = []
+            batch_timestamps = []
 
-        while True:
-            ret, frame = await anyio.to_thread.run_sync(cap.read)
-            if not ret:
-                break
+            while True:
+                ret, frame = await anyio.to_thread.run_sync(cap.read)
+                if not ret:
+                    break
 
-            if frame_idx % sample_interval == 0:
-                batch_frames.append(frame)
-                batch_timestamps.append(round(frame_idx / fps, 3))
+                if frame_idx % sample_interval == 0:
+                    batch_frames.append(frame)
+                    batch_timestamps.append(round(frame_idx / fps, 3))
 
-                if len(batch_frames) >= BATCH_SIZE:
-                    result = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
-                    batch_detections = result["batch_detections"]
-                    
-                    # Global scores for this batch
-                    batch_weapon_conf = result.get("weapon_confidence", 0.0)
-                    batch_violence_conf = result.get("violence_confidence", 0.0)
-                    batch_threat_type = result.get("threat_type", "none")
+                    if len(batch_frames) >= BATCH_SIZE:
+                        result = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+                        batch_detections = result["batch_detections"]
+                        
+                        # Global scores for this batch
+                        batch_weapon_conf = result.get("weapon_confidence", 0.0)
+                        batch_violence_conf = result.get("violence_confidence", 0.0)
+                        batch_threat_type = result.get("threat_type", "none")
 
-                    for i, ts in enumerate(batch_timestamps):
-                        sample_count += 1
-                        telemetry_service.log_frames(sample_interval, uid)
-                        dets = batch_detections[i]
+                        for i, ts in enumerate(batch_timestamps):
+                            sample_count += 1
+                            telemetry_service.log_frames(sample_interval, uid)
+                            dets = batch_detections[i]
 
-                        progress = sample_count / max(total_samples, 1)
-                        payload = {
-                            "type": "frame",
-                            "timestamp": ts,
-                            "detections": dets,
-                            "threat_type": batch_threat_type,
-                            "weapon_confidence": batch_weapon_conf,
-                            "violence_confidence": batch_violence_conf,
-                            "progress": round(min(progress, 1.0), 3)
-                        }
-                        yield f"data: {json.dumps(payload)}\n\n"
+                            progress = sample_count / max(total_samples, 1)
+                            payload = {
+                                "type": "frame",
+                                "timestamp": ts,
+                                "detections": dets,
+                                "threat_type": batch_threat_type,
+                                "weapon_confidence": batch_weapon_conf,
+                                "violence_confidence": batch_violence_conf,
+                                "progress": round(min(progress, 1.0), 3)
+                            }
+                            yield f"data: {json.dumps(payload)}\n\n"
 
-                    batch_frames     = []
-                    batch_timestamps = []
+                        batch_frames     = []
+                        batch_timestamps = []
 
-            frame_idx += 1
-            if frame_idx % 50 == 0:
-                await anyio.sleep(0.01)
+                frame_idx += 1
+                if frame_idx % 50 == 0:
+                    await anyio.sleep(0.01)
 
-        # Flush remaining frames
-        if len(batch_frames) >= 2:
-            result = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
-            batch_detections = result["batch_detections"]
-            batch_weapon_conf = result.get("weapon_confidence", 0.0)
-            batch_violence_conf = result.get("violence_confidence", 0.0)
-            batch_threat_type = result.get("threat_type", "none")
-            
-            for i, ts in enumerate(batch_timestamps):
-                sample_count += 1
-                dets = batch_detections[i] if i < len(batch_detections) else []
-                progress = sample_count / max(total_samples, 1)
-                payload = {
-                    "type": "frame",
-                    "timestamp": ts,
-                    "detections": dets,
-                    "threat_type": batch_threat_type,
-                    "weapon_confidence": batch_weapon_conf,
-                    "violence_confidence": batch_violence_conf,
-                    "progress": round(min(progress, 1.0), 3)
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
+            # Flush remaining frames
+            if len(batch_frames) >= 2:
+                result = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+                batch_detections = result["batch_detections"]
+                batch_weapon_conf = result.get("weapon_confidence", 0.0)
+                batch_violence_conf = result.get("violence_confidence", 0.0)
+                batch_threat_type = result.get("threat_type", "none")
+                
+                for i, ts in enumerate(batch_timestamps):
+                    sample_count += 1
+                    dets = batch_detections[i] if i < len(batch_detections) else []
+                    progress = sample_count / max(total_samples, 1)
+                    payload = {
+                        "type": "frame",
+                        "timestamp": ts,
+                        "detections": dets,
+                        "threat_type": batch_threat_type,
+                        "weapon_confidence": batch_weapon_conf,
+                        "violence_confidence": batch_violence_conf,
+                        "progress": round(min(progress, 1.0), 3)
+                    }
+                    yield f"data: {json.dumps(payload)}\n\n"
 
-        await anyio.to_thread.run_sync(cap.release)
-        yield f"data: {json.dumps({'type': 'done', 'total_analyzed': sample_count})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'total_analyzed': sample_count})}\n\n"
+
+        except Exception as exc:
+            logger.error(f"Error in analyze_video generator: {exc}")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+        finally:
+            if cap:
+                await anyio.to_thread.run_sync(cap.release)
 
     return StreamingResponse(
         generate(),
@@ -846,6 +881,7 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
     )
 
 

@@ -78,21 +78,35 @@ export default function VideoPlayer({
                     signal: controller.signal
                 });
 
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}`);
+                }
+
                 if (!response.body) throw new Error("No response body");
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
 
+                let buffer = "";
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done || !isMounted) break;
 
-                    const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split("\n");
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+
+                    // The last element of split is either an empty string (if buffer ended in \n)
+                    // or a partial line. We keep it in the buffer for the next iteration.
+                    buffer = lines.pop() || "";
 
                     for (const line of lines) {
-                        if (!line.startsWith("data: ")) continue;
+                        const trimmedLine = line.trim();
+                        if (!trimmedLine || !trimmedLine.startsWith("data: ")) continue;
+
                         try {
-                            const data = JSON.parse(line.slice(6));
+                            const data = JSON.parse(trimmedLine.slice(6));
+                            if (data.type === "error") {
+                                throw new Error(data.message || "Unknown analysis error");
+                            }
                             if (data.type === "start") {
                                 setAnalysisStatus("ANALYZING SOURCE...");
                             } else if (data.type === "frame") {
@@ -121,7 +135,7 @@ export default function VideoPlayer({
                                 setAnalyzing(false);
                             }
                         } catch (e) {
-                            console.error("Failed to parse SSE line:", e);
+                            console.error("Failed to parse SSE line:", e, "Line content:", trimmedLine);
                         }
                     }
                 }
@@ -179,12 +193,19 @@ export default function VideoPlayer({
                     ctx.drawImage(videoEl, 0, 0, targetWidth, targetHeight);
 
                     const blob = await new Promise<Blob | null>((resolve) => {
-                        canvas.toBlob((b) => resolve(b), "image/jpeg", 0.6);
+                        canvas.toBlob((b) => resolve(b), "image/jpeg", 0.4);
                     });
                     if (!blob) return;
 
-                    const buffer = await blob.arrayBuffer();
-                    const b64Str = btoa(new Uint8Array(buffer).reduce((acc, byte) => acc + String.fromCharCode(byte), ""));
+                    const b64Str = await new Promise<string>((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => {
+                            const result = reader.result as string;
+                            resolve(result.split(",")[1] || "");
+                        };
+                        reader.onerror = reject;
+                        reader.readAsDataURL(blob);
+                    });
 
                     const payload = {
                         frame_b64: b64Str,
@@ -311,7 +332,7 @@ export default function VideoPlayer({
                 ctx.drawImage(hiddenVideo, 0, 0, renderCanvas.width, renderCanvas.height);
             }
             const frameBlob = await new Promise<Blob | null>((resolve) =>
-                renderCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.82)
+                renderCanvas.toBlob((b) => resolve(b), "image/jpeg", 0.5)
             );
 
             // captureStream 15fps
@@ -601,12 +622,14 @@ export default function VideoPlayer({
 
                     console.error("Video Load Error Detail:", {
                         code: error?.code,
-                        message: error?.message,
-                        src: video.currentSrc || video.src
+                        message: error?.message || "No error message",
+                        src: video.currentSrc || video.src,
+                        readyState: video.readyState,
+                        networkState: video.networkState
                     });
 
                     setVideoLoading(false);
-                    setVideoError(`${message}\nSRC: ${video.currentSrc || video.src}`);
+                    setVideoError(`${message}\nSRC: ${video.currentSrc || video.src}\nCODE: ${error?.code}`);
                 }}
             />
             <canvas

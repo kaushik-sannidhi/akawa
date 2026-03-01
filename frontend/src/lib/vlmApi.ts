@@ -18,11 +18,15 @@ export interface VLMAnalysisResponse {
 export async function analyzeVideoWithVLM({ videoBlob, prompt }: VLMAnalysisRequest): Promise<VLMAnalysisResponse> {
     try {
         // Convert Blob to Base64
-        const buffer = await videoBlob.arrayBuffer();
-        const base64String = btoa(
-            new Uint8Array(buffer)
-                .reduce((data, byte) => data + String.fromCharCode(byte), '')
-        );
+        const base64String = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                const result = reader.result as string;
+                resolve(result.split(",")[1] || "");
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(videoBlob);
+        });
 
         const payload: any = {
             video_b64: base64String
