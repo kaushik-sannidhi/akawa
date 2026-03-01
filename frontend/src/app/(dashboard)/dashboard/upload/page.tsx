@@ -141,7 +141,7 @@ export default function UploadAnalysisPage() {
             setAlerts(prev => {
                 const updated = prev.map(a =>
                     (Math.abs(a.startTimestamp - timestamp) < 5.0 && a.vlmAnalysis === "ANALYZING...")
-                        ? { ...a, vlmAnalysis: response.text || `[VLM ERROR] ${response.error}` }
+                        ? { ...a, vlmAnalysis: response.text || null }
                         : a
                 );
                 debouncedSave(updated);
