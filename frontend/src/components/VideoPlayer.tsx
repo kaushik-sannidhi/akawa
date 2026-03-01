@@ -44,13 +44,7 @@ export default function VideoPlayer({
     const [baseUrl, setBaseUrl] = useState(getBaseUrl());
 
     useEffect(() => {
-        let cancelled = false;
-        resolveBaseUrl(7000).then((url) => {
-            if (!cancelled) setBaseUrl(url);
-        });
-        return () => {
-            cancelled = true;
-        };
+        setBaseUrl(getBaseUrl());
     }, []);
 
     useEffect(() => {
@@ -73,7 +67,7 @@ export default function VideoPlayer({
 
         const runAnalysis = async () => {
             try {
-                const resolvedBaseUrl = await resolveBaseUrl(7000);
+                const resolvedBaseUrl = getBaseUrl();
                 if (!abortController.signal.aborted) {
                     setBaseUrl(resolvedBaseUrl);
                 }

@@ -5,13 +5,9 @@ import { Trash2, Wifi, WifiOff } from "lucide-react";
 import { motion } from "framer-motion";
 import { getWsUrl } from "@/lib/config";
 import { requestRealtimeJoin, type RealtimeJoinRole } from "@/lib/cloudflare-calls";
-import { useRealtimeKitClient } from "@cloudflare/realtimekit-react";
-import {
-    RtkControlbar,
-    RtkParticipantsAudio,
-    RtkSimpleGrid,
-    RtkUiProvider,
-} from "@cloudflare/realtimekit-react-ui";
+import { useRealtimeKitClient, useRealtimeKitMeeting, useRealtimeKitSelector } from "@cloudflare/realtimekit-react";
+import { RtkUiProvider } from "@cloudflare/realtimekit-react-ui";
+import { Mic, MicOff, Volume2, VolumeX } from "lucide-react";
 
 interface StreamNodeProps {
     stream: any;
@@ -68,7 +64,7 @@ function useClientCameraInferenceUploader(
             if (lastTrackIdRef.current === track.id) return;
             lastTrackIdRef.current = track.id;
             hiddenVideo.srcObject = new MediaStream([track]);
-            hiddenVideo.play().catch(() => {});
+            hiddenVideo.play().catch(() => { });
         };
 
         const sendFrame = async () => {
@@ -137,6 +133,148 @@ function useClientCameraInferenceUploader(
     }, [enabled, meeting, setIsStreaming, streamId]);
 }
 
+function BrutalistControls({ isOwner }: { isOwner: boolean }) {
+    const { meeting } = useRealtimeKitMeeting();
+    const audioEnabled = useRealtimeKitSelector((m) => m.self.audioEnabled);
+    const videoEnabled = useRealtimeKitSelector((m) => m.self.videoEnabled);
+    const [viewerMuted, setViewerMuted] = useState(false);
+
+    useEffect(() => {
+        if (!isOwner) {
+            // Mute all remote audio tracks if viewerMuted is true
+            const participants = Array.from(meeting.participants.joined.values());
+            participants.forEach((p: any) => {
+                if (p.audioTrack) {
+                    p.audioTrack.enabled = !viewerMuted;
+                }
+            });
+        }
+    }, [viewerMuted, meeting.participants.joined, isOwner]);
+
+    if (isOwner) {
+        return (
+            <div className="absolute bottom-4 right-4 z-50 flex gap-2">
+                <button
+                    onClick={() => {
+                        if (audioEnabled) meeting.self.disableAudio();
+                        else meeting.self.enableAudio();
+                    }}
+                    className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${audioEnabled
+                            ? "border-[var(--color-data)] bg-[var(--color-data)] text-black hover:bg-white"
+                            : "border-[var(--color-alert)] bg-[var(--color-alert)] text-black hover:bg-white"
+                        }`}
+                >
+                    {audioEnabled ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
+                    {audioEnabled ? "MIC_ON" : "MIC_OFF"}
+                </button>
+                <button
+                    onClick={() => {
+                        if (videoEnabled) meeting.self.disableVideo();
+                        else meeting.self.enableVideo();
+                    }}
+                    className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${videoEnabled
+                            ? "border-[var(--color-silica)] bg-black text-white hover:border-white"
+                            : "border-[var(--color-iron)] bg-[var(--color-iron)] text-[var(--color-silica)]"
+                        }`}
+                >
+                    {videoEnabled ? "CAM_ON" : "CAM_OFF"}
+                </button>
+            </div>
+        );
+    }
+
+    // Viewer controls
+    return (
+        <div className="absolute bottom-4 right-4 z-50 flex gap-2">
+            <button
+                onClick={() => setViewerMuted(!viewerMuted)}
+                className={`px-3 py-2 text-[10px] font-bold border-[2px] flex items-center gap-2 transition-colors ${!viewerMuted
+                        ? "border-[var(--color-data)] bg-[var(--color-data)] text-black hover:bg-white"
+                        : "border-[var(--color-alert)] bg-[var(--color-alert)] text-black hover:bg-white"
+                    }`}
+            >
+                {!viewerMuted ? <Volume2 className="w-3 h-3" /> : <VolumeX className="w-3 h-3" />}
+                {!viewerMuted ? "AUDIO_ON" : "AUDIO_MUTED"}
+            </button>
+        </div>
+    );
+}
+
+function ParticipantVideo({ track, isLocal }: { track?: MediaStreamTrack; isLocal?: boolean }) {
+    const videoRef = useRef<HTMLVideoElement>(null);
+
+    useEffect(() => {
+        if (videoRef.current && track) {
+            const stream = new MediaStream([track]);
+            videoRef.current.srcObject = stream;
+        }
+    }, [track]);
+
+    return (
+        <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={isLocal} // Always mute local video to prevent echo
+            className="w-full h-full object-cover bg-[#0a0a0a]"
+        />
+    );
+}
+
+function BrutalistGrid({ isOwner }: { isOwner: boolean }) {
+    const { meeting } = useRealtimeKitMeeting();
+    const selfVideoTrack = useRealtimeKitSelector((m) => m.self.videoTrack);
+    const participantsMap = useRealtimeKitSelector((m) => m.participants.joined);
+    const participants = Array.from(participantsMap.values());
+
+    // We prioritize showing the publisher's video
+    // If we are the owner, we show our own video.
+    // If we are a viewer, we show the publisher's video (first participant with video).
+
+    let activeTrack: MediaStreamTrack | undefined = undefined;
+    let isLocal = false;
+
+    if (isOwner && selfVideoTrack) {
+        activeTrack = selfVideoTrack;
+        isLocal = true;
+    } else if (participants.length > 0) {
+        const publisher = participants.find((p: any) => p.videoTrack);
+        if (publisher && publisher.videoTrack) {
+            activeTrack = publisher.videoTrack;
+        }
+    }
+
+    return (
+        <div className="absolute inset-0 z-0 bg-black">
+            {activeTrack ? (
+                <ParticipantVideo track={activeTrack} isLocal={isLocal} />
+            ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center bg-[#0a0a0a]">
+                    <span className="text-[var(--color-iron)] text-[10px] font-bold tracking-widest animate-pulse">
+                        [ WAITING_FOR_VIDEO_STREAM ]
+                    </span>
+                </div>
+            )}
+        </div>
+    );
+}
+
+// Invisible audio consumers for viewer mode
+function ParticipantAudioConsumers() {
+    const { meeting } = useRealtimeKitMeeting();
+    const participantsMap = useRealtimeKitSelector((m) => m.participants.joined);
+    const participants = Array.from(participantsMap.values());
+
+    return (
+        <div className="hidden">
+            {participants.map((p: any) => {
+                if (!p.audioTrack) return null;
+                return <ParticipantVideo key={p.id} track={p.audioTrack} />; // Hack using video tag for audio to play
+            })}
+        </div>
+    );
+}
+
 function RealtimeClientView({
     stream,
     isOwner,
@@ -192,11 +330,11 @@ function RealtimeClientView({
                 if (!alive) return;
 
                 if (isOwner) {
-                    await client.self.enableVideo().catch(() => {});
-                    await client.self.enableAudio().catch(() => {});
+                    await client.self.enableVideo().catch(() => { });
+                    await client.self.enableAudio().catch(() => { });
                 } else {
-                    await client.self.disableVideo().catch(() => {});
-                    await client.self.disableAudio().catch(() => {});
+                    await client.self.disableVideo().catch(() => { });
+                    await client.self.disableAudio().catch(() => { });
                 }
 
                 setVideoLoaded(true);
@@ -218,7 +356,7 @@ function RealtimeClientView({
             alive = false;
             if (retryTimer) clearTimeout(retryTimer);
             if (activeMeeting) {
-                activeMeeting.leave().catch(() => {});
+                activeMeeting.leave().catch(() => { });
             }
         };
     }, [initMeeting, isOwner, localDeviceId, setIsStreaming, setNetState, setVideoLoaded, stream?.cf_meeting_id, stream?.id, stream?.name]);
@@ -232,14 +370,10 @@ function RealtimeClientView({
     return (
         <div className="absolute inset-0 z-10 rtk-theme" style={RTK_THEME_VARS}>
             <RtkUiProvider meeting={meeting as any}>
-                <div className="h-full w-full flex flex-col bg-black">
-                    <div className="flex-1 min-h-0">
-                        <RtkSimpleGrid />
-                    </div>
-                    <div className="border-t border-[var(--color-iron)] bg-black/85">
-                        <RtkControlbar variant="boxed" />
-                    </div>
-                    <RtkParticipantsAudio />
+                <div className="h-full w-full relative bg-black overflow-hidden">
+                    <BrutalistGrid isOwner={isOwner} />
+                    <BrutalistControls isOwner={isOwner} />
+                    {!isOwner && <ParticipantAudioConsumers />}
                 </div>
             </RtkUiProvider>
         </div>
@@ -468,36 +602,31 @@ export default function StreamNode({
                 event.stopPropagation();
                 onDoubleClick?.();
             }}
-            className={`relative w-full h-full flex-1 min-h-0 bg-[#0A0A0A] flex flex-col group cursor-pointer origin-center border-[2px] overflow-hidden ${
-                isPrimary
+            className={`relative w-full h-full flex-1 min-h-0 bg-[#0A0A0A] flex flex-col group cursor-pointer origin-center border-[2px] overflow-hidden ${isPrimary
                     ? "border-[var(--color-data)]"
                     : "border-[var(--color-dim)] hover:border-[var(--color-iron)]"
-            }`}
+                }`}
         >
             <div className="p-2 flex justify-between z-40 bg-gradient-to-b from-black/80 to-transparent absolute top-0 left-0 w-full">
                 <span
-                    className={`bg-black text-[var(--color-data)] px-2 font-bold ${
-                        isPrimary ? "text-[10px]" : "text-[8px]"
-                    } border-[1px] border-[var(--color-iron)] truncate max-w-[180px] whitespace-nowrap`}
+                    className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"
+                        } border-[1px] border-[var(--color-iron)] truncate max-w-[180px] whitespace-nowrap`}
                 >
                     {stream.name} [{String(stream.type || "UNKNOWN").toUpperCase()}]
                 </span>
                 <div className="flex gap-1">
                     {isClientCam && (
                         <span
-                            className={`bg-black px-1 border border-[var(--color-iron)] flex items-center ${
-                                isStreaming ? "text-[var(--color-data)]" : "text-[#555]"
-                            }`}
+                            className={`bg-black px-1 border border-[var(--color-iron)] flex items-center ${isStreaming ? "text-[var(--color-data)]" : "text-[#555]"
+                                }`}
                         >
                             {isStreaming ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
                         </span>
                     )}
                     <span
-                        className={`bg-black px-2 font-bold ${
-                            isPrimary ? "text-[10px]" : "text-[8px]"
-                        } border-[1px] border-[var(--color-iron)] ${
-                            isStreaming ? "text-[var(--color-alert)] animate-pulse" : "text-[#333]"
-                        }`}
+                        className={`bg-black px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"
+                            } border-[1px] border-[var(--color-iron)] ${isStreaming ? "text-[var(--color-alert)] animate-pulse" : "text-[#333]"
+                            }`}
                     >
                         {isStreaming ? "LIVE" : "..."}
                     </span>

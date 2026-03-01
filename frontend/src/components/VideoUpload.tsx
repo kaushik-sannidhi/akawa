@@ -4,7 +4,7 @@ import { useState } from "react";
 import { HardDriveDownload } from "lucide-react";
 import { useTelemetry } from "@/context/TelemetryContext";
 import { auth } from "@/lib/firebase";
-import { resolveBaseUrl } from "@/lib/config";
+import { getBaseUrl } from "@/lib/config";
 
 export default function VideoUpload({ onUploadComplete }: { onUploadComplete: (data: any) => void }) {
     const { logSysEvent } = useTelemetry();
@@ -31,7 +31,7 @@ export default function VideoUpload({ onUploadComplete }: { onUploadComplete: (d
         formData.append("uid", auth.currentUser?.uid || "anonymous");
 
         try {
-            const baseUrl = await resolveBaseUrl(7000);
+            const baseUrl = getBaseUrl();
             const controller = new AbortController();
             // Large uploads + transcoding can exceed 2 minutes.
             const timer = setTimeout(() => controller.abort(), 15 * 60 * 1000);
