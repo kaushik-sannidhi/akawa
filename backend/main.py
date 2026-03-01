@@ -490,7 +490,7 @@ async def vlm_analyze(req: VLMAnalyzeRequest):
         payload: dict = {"video_b64": req.video_b64}
         if req.prompt:
             payload["prompt"] = req.prompt
-        resp = requests.post(VLM_ANALYZE_URL, json=payload, timeout=60)
+        resp = requests.post(VLM_ANALYZE_URL, json=payload, timeout=120)
         return resp.json() if resp.status_code == 200 else {"error": resp.text, "text": ""}
     except Exception as e:
         logger.error(f"VLM analyze error: {e}")
@@ -1261,5 +1261,5 @@ def r2_status():
         "bucket": R2_BUCKET_NAME,
         "public_url": R2_PUBLIC_URL,
         "require_r2_uploads": os.getenv("REQUIRE_R2_REPORT_UPLOADS", "true"),
-        "allow_local_fallback": os.getenv("ALLOW_LOCAL_REPORT_FALLBACK", "false"),
+        "allow_local_fallback": os.getenv("ALLOW_LOCAL_REPORT_FALLBACK", "true"),
     }
