@@ -28,6 +28,7 @@ export default function StreamNode({
 
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const hiddenVideoRef = useRef<HTMLVideoElement>(null);
+    const viewerImgRef = useRef<HTMLImageElement>(null);
 
     const [isStreaming, setIsStreaming] = useState(false);
     const [netState, setNetState] = useState("init");
@@ -44,7 +45,7 @@ export default function StreamNode({
     const rafRef = useRef<number>(0);
     const lastDetectionsRaw = useRef<any[]>([]);
     const weaponSeenStartRef = useRef<number | null>(null);
-    const lastFrameRef = useRef<ImageBitmap | null>(null);
+    const lastObjectUrlRef = useRef<string | null>(null);
 
     const isOwner = useMemo(
         () => stream.device_id === localDeviceId && !!localDeviceId,
@@ -77,33 +78,34 @@ export default function StreamNode({
     }, []);
 
     // Helper: Draw single frame
-    const drawFrameAndDetections = useCallback((imageBitmap?: ImageBitmap, detections?: any[]) => {
+    const drawFrameAndDetections = useCallback((detections?: any[]) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
 
-        if (imageBitmap) {
-            lastFrameRef.current = imageBitmap;
+        // Size the canvas to the video/img
+        const video = hiddenVideoRef.current;
+        const img = viewerImgRef.current;
+
+        let targetWidth = 640;
+        let targetHeight = 480;
+
+        if (isOwner && video && video.videoWidth > 0) {
+            targetWidth = video.videoWidth;
+            targetHeight = video.videoHeight;
+        } else if (!isOwner && img && img.naturalWidth > 0) {
+            targetWidth = img.naturalWidth;
+            targetHeight = img.naturalHeight;
         }
 
-        if (lastFrameRef.current && !isOwner) {
-            canvas.width = lastFrameRef.current.width;
-            canvas.height = lastFrameRef.current.height;
-            ctx.drawImage(lastFrameRef.current, 0, 0);
-        } else {
-            // Owner mode relies on the hidden video tag underneath, so we clear the canvas
-            const video = hiddenVideoRef.current;
-            if (video && video.videoWidth > 0) {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-            } else if (canvas.width <= 300) {
-                canvas.width = 640;
-                canvas.height = 480;
-            }
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (canvas.width !== targetWidth || canvas.height !== targetHeight) {
+            canvas.width = targetWidth;
+            canvas.height = targetHeight;
         }
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         const dw = canvas.width;
         const dh = canvas.height;
@@ -183,7 +185,7 @@ export default function StreamNode({
                 ctx.fillRect(x1, y1, width, height);
             }
         });
-    }, []);
+    }, [isOwner]);
 
     // Owner logic: capture local camera and publish frames
     useEffect(() => {
@@ -315,7 +317,7 @@ export default function StreamNode({
                         const payload = JSON.parse(event.data);
                         if (payload.detections) {
                             onDetections(payload.detections, Number(payload.timestamp || Date.now()));
-                            drawFrameAndDetections(undefined, payload.detections);
+                            drawFrameAndDetections(payload.detections);
                         }
                     } catch (e) {
                         // ignore
@@ -325,10 +327,17 @@ export default function StreamNode({
                     if (isOwner) return; // Owner draws local video
 
                     try {
-                        const imageBitmap = await createImageBitmap(event.data);
-                        drawFrameAndDetections(imageBitmap);
+                        const blob = event.data instanceof Blob ? event.data : new Blob([event.data]);
+                        const url = URL.createObjectURL(blob);
+                        if (viewerImgRef.current) {
+                            viewerImgRef.current.src = url;
+                        }
+                        if (lastObjectUrlRef.current) {
+                            URL.revokeObjectURL(lastObjectUrlRef.current);
+                        }
+                        lastObjectUrlRef.current = url;
                     } catch (e) {
-                        // decode error
+                        // ignore error
                     }
                 }
             };
@@ -349,6 +358,7 @@ export default function StreamNode({
             alive = false;
             if (ws) ws.close();
             if (pingInterval) clearInterval(pingInterval);
+            if (lastObjectUrlRef.current) URL.revokeObjectURL(lastObjectUrlRef.current);
         };
     }, [drawFrameAndDetections, isOwner, onDetections, stream.id]);
 
@@ -432,13 +442,19 @@ export default function StreamNode({
                 )}
 
                 {/* For Publisher, we show the local video directly under the canvas for zero latency */}
-                {isOwner && (
+                {isOwner ? (
                     <video
                         ref={hiddenVideoRef}
                         muted
                         autoPlay
                         playsInline
                         className="absolute inset-0 w-full h-full object-cover z-10"
+                    />
+                ) : (
+                    <img
+                        ref={viewerImgRef}
+                        className="absolute inset-0 w-full h-full object-cover z-10"
+                        alt="Stream Frame"
                     />
                 )}
 

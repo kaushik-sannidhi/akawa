@@ -95,6 +95,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     finally:
         stream.publisher_wss.discard(websocket)
         await stream_manager.deactivate_stream(stream)
+        await stream_manager.deactivate_stream(stream)
 
 
 @app.websocket("/ws/viewer/{stream_id}")
