@@ -4,18 +4,23 @@ export function getBaseUrl() {
         if (host === "localhost" || host === "127.0.0.1") {
             return `http://${host}:8000`;
         }
+        // Use current domain for API calls
+        return `${window.location.protocol}//${host}`;
     }
     return "https://akawa.ingeniumstem.org";
 }
 
-export function getWsUrl() {
+export function getWsUrl(path: string = "") {
     if (typeof window !== "undefined") {
         const host = window.location.hostname;
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         if (host === "localhost" || host === "127.0.0.1") {
-            return `ws://${host}`;
+            return `${protocol}//${host}:8000${path}`;
         }
+        // Use current domain for WebSocket
+        return `${protocol}//${host}${path}`;
     }
-    return "wss://akawa.ingeniumstem.org";
+    return `wss://akawa.ingeniumstem.org${path}`;
 }
 
 export function getPicowsWsUrl() {

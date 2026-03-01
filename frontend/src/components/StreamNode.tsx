@@ -22,6 +22,10 @@ export default function StreamNode({
     onDoubleClick,
     isPrimary = false,
 }: StreamNodeProps) {
+    if (!stream) {
+        return <div className="p-4 text-xs font-mono text-red-500">[ERROR: STREAM_UNDEFINED]</div>;
+    }
+
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const hiddenVideoRef = useRef<HTMLVideoElement>(null);
 
