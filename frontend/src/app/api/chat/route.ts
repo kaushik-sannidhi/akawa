@@ -8,6 +8,8 @@
  *  4. Return the cleaned response
  */
 
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
+
 const MODAL_LLM_URL =
     "https://apat7--akawa-llm-intelligence-akawaintelligence-generate-report.modal.run";
 
@@ -202,12 +204,11 @@ HOW TO RESPOND:
 - COMPREHENSIVE ANALYSIS: Incorporate the full VLM AI Analysis details to explain exactly what was seen (e.g. specific movements, objects, or behaviors).
 - FORMATTING: Use bold, lists, or headers where appropriate to make your detailed report easy to read, but keep the overall feel conversational.`;
 
-    const { GoogleGenerativeAI } = require("@google/generative-ai");
-
-    // Call Gemini with a timeout
+    // Call Gemini
     try {
         const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY;
         if (!apiKey) {
+            console.error("DEBUG: GEMINI_API_KEY MISSING");
             return Response.json(
                 { role: "assistant", content: "[SYSTEM] Error: GEMINI_API_KEY is not set in environment." },
                 { status: 200 }
@@ -216,24 +217,44 @@ HOW TO RESPOND:
 
         const genAI = new GoogleGenerativeAI(apiKey);
         const model = genAI.getGenerativeModel({
-            model: "gemini-2.5-flash",
+            model: "gemini-2.5-flash", // Revert to 2.5 which has quota
             systemInstruction: systemPrompt,
-            generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 2048,
-            }
+            safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+            ]
         });
 
         const geminiMessages = messages.map((m: any) => ({
             role: m.role === "user" ? "user" : "model",
-            parts: [{ text: m.content }]
+            parts: [{ text: m.content || "" }]
         }));
 
-        const result = await model.generateContent({ contents: geminiMessages });
-        const cleanText = result.response.text();
+        console.log("DEBUG: Calling Gemini with", geminiMessages.length, "messages");
 
+        const result = await model.generateContent({
+            contents: geminiMessages,
+            generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 4096, // Increase further
+            }
+        });
+
+        const response = result.response;
+        const cleanText = response.text();
+
+        if (!cleanText) {
+            console.warn("DEBUG: Gemini returned EMPTY response. Candidates:", JSON.stringify(response.candidates));
+            return Response.json({ role: "assistant", content: "I apologize, but I'm having trouble retrieving the full report. Please try asking for a specific incident." });
+        }
+
+        console.log("DEBUG: Gemini responded with", cleanText.length, "chars");
         return Response.json({ role: "assistant", content: cleanText });
+
     } catch (err: any) {
+        console.error("DEBUG: Gemini API Error:", err);
         const errorMsg = `Communication error: ${err.message}`;
 
         return Response.json(
