@@ -9,6 +9,9 @@ const WEAPON_CLASSES = ["gun", "knife", "violence"];
 type FrameDetections = {
     timestamp: number;
     detections: any[];
+    weaponConfidence?: number;
+    violenceConfidence?: number;
+    threatType?: string;
 };
 
 export default function VideoPlayer({
@@ -40,6 +43,9 @@ export default function VideoPlayer({
     const [videoLoading, setVideoLoading] = useState(true);
     const [videoError, setVideoError] = useState<string | null>(null);
     const detectionMapRef = useRef<FrameDetections[]>([]);
+    const [currentViolenceConf, setCurrentViolenceConf] = useState(0);
+    const [currentWeaponConf, setCurrentWeaponConf] = useState(0);
+    const [currentThreatType, setCurrentThreatType] = useState("none");
     const alertsFiredRef = useRef<Set<string>>(new Set());
     const [baseUrl, setBaseUrl] = useState(getBaseUrl());
 
@@ -54,11 +60,81 @@ export default function VideoPlayer({
         }
     }, [seekTrigger]);
 
+    // === PRE-ANALYSIS SSE ===
+    useEffect(() => {
+        if (!videoId) return;
+
+        let isMounted = true;
+        const controller = new AbortController();
+
+        const runAnalysis = async () => {
+            setAnalyzing(true);
+            setProgress(0);
+            setAnalysisStatus("INITIALIZING...");
+            detectionMapRef.current = [];
+
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/analyze/${videoId}?uid=${auth.currentUser?.uid || "anonymous"}`, {
+                    signal: controller.signal
+                });
+
+                if (!response.body) throw new Error("No response body");
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done || !isMounted) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split("\n");
+
+                    for (const line of lines) {
+                        if (!line.startsWith("data: ")) continue;
+                        try {
+                            const data = JSON.parse(line.slice(6));
+                            if (data.type === "start") {
+                                setAnalysisStatus("ANALYZING SOURCE...");
+                            } else if (data.type === "frame") {
+                                setProgress(data.progress);
+                                detectionMapRef.current.push({
+                                    timestamp: data.timestamp,
+                                    detections: data.detections || [],
+                                    weaponConfidence: data.weapon_confidence || 0,
+                                    violenceConfidence: data.violence_confidence || 0,
+                                    threatType: data.threat_type || "none"
+                                });
+                                // Keep sorted for binary search later
+                                detectionMapRef.current.sort((a, b) => a.timestamp - b.timestamp);
+                            } else if (data.type === "done") {
+                                setAnalyzing(false);
+                            }
+                        } catch (e) {
+                            console.error("Failed to parse SSE line:", e);
+                        }
+                    }
+                }
+            } catch (err: any) {
+                if (err.name !== "AbortError") {
+                    console.error("Forensic analysis failed:", err);
+                    setAnalysisStatus("ANALYSIS_FAILED");
+                    setAnalyzing(false);
+                }
+            }
+        };
+
+        runAnalysis();
+
+        return () => {
+            isMounted = false;
+            controller.abort();
+        };
+    }, [videoId]);
+
     // === LIVE ANALYSIS LOOP ===
     const analysisIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
-        setAnalyzing(false);
         const videoEl = videoRef.current;
         if (!videoEl) return;
 
@@ -329,8 +405,14 @@ export default function VideoPlayer({
                     const phase = (Date.now() % 1000) / 1000;
                     const pulseOpacity = 0.4 + 0.6 * Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
 
+                    // Update global UI scores
+                    setCurrentViolenceConf(nearest.violenceConfidence || 0);
+                    setCurrentWeaponConf(nearest.weaponConfidence || 0);
+                    setCurrentThreatType(nearest.threatType || "none");
+
                     nearest.detections.forEach((d: any) => {
                         const isWeaponType = WEAPON_CLASSES.includes(d.class_name) || ["weapon", "gun"].includes(d.detection_type);
+                        const isViolence = d.detection_type === "violent_person";
 
                         // Look back 1s to verify persistence
                         let isPersistentWeapon = false;
@@ -346,7 +428,7 @@ export default function VideoPlayer({
                         }
 
                         const isWeapon = isWeaponType && isPersistentWeapon;
-                        const isPerson = d.class_name === "person";
+                        const isPerson = d.class_name === "person" || isViolence;
 
                         // Person: lower threshold for situational awareness
                         const threshold = isPerson ? 0.25 : thresholdRef.current;
@@ -398,6 +480,31 @@ export default function VideoPlayer({
                             ctx.fillRect(px1, py1 - chipHeight, tw + 12, chipHeight);
                             ctx.fillStyle = "white";
                             ctx.fillText(labelText, px1 + 6, py1 - 6);
+                        } else if (isViolence) {
+                            // High-Alert Violence UI
+                            const opacity = pulseOpacity;
+                            const baseColor = `rgba(255, 120, 0, ${opacity})`;
+                            const fillColor = `rgba(255, 120, 0, ${opacity * 0.15})`;
+
+                            ctx.strokeStyle = baseColor;
+                            ctx.lineWidth = 3;
+                            ctx.strokeRect(px1, py1, sw, sh);
+                            ctx.fillStyle = fillColor;
+                            ctx.fillRect(px1, py1, sw, sh);
+
+                            // Jagged border effect
+                            ctx.setLineDash([5, 3]);
+                            ctx.strokeStyle = `rgba(255, 120, 0, ${opacity * 0.8})`;
+                            ctx.strokeRect(px1 - 2, py1 - 2, sw + 4, sh + 4);
+                            ctx.setLineDash([]);
+
+                            const labelText = `VIOLENCE ${(d.confidence * 100).toFixed(0)}%`;
+                            ctx.font = "bold 12px Inter, sans-serif";
+                            const tw = ctx.measureText(labelText).width;
+                            ctx.fillStyle = "rgba(255, 120, 0, 0.9)";
+                            ctx.fillRect(px1, py1 - 20, tw + 10, 20);
+                            ctx.fillStyle = "white";
+                            ctx.fillText(labelText, px1 + 5, py1 - 6);
                         } else {
                             // Presence / Passive Indicator
                             let color = "rgba(200, 200, 200, 0.5)";
@@ -474,8 +581,44 @@ export default function VideoPlayer({
             />
             <canvas
                 ref={canvasRef}
-                className="absolute top-0 left-0 w-full h-full pointer-events-none object-contain"
+                className="absolute top-0 left-0 w-full h-full pointer-events-none object-contain z-10"
             />
+
+            {/* Real-time Threat Indicators */}
+            {!analyzing && (currentViolenceConf > 0.3 || currentWeaponConf > 0.3) && (
+                <div className="absolute top-4 left-4 z-20 flex flex-col gap-2 pointer-events-none">
+                    {currentWeaponConf > 0.4 && (
+                        <div className="flex items-center gap-2 bg-black/80 border-l-[3px] border-[var(--color-alert)] p-2 animate-pulse shadow-[0_0_15px_rgba(255,51,0,0.5)]">
+                            <div className="w-2 h-2 bg-[var(--color-alert)] rounded-full" />
+                            <div className="flex flex-col">
+                                <span className="text-[10px] font-bold text-[var(--color-alert)] tracking-widest line-clamp-1">[ WEAPON_DETECTED ]</span>
+                                <div className="w-32 h-1 bg-[var(--color-iron)] mt-1 overflow-hidden">
+                                    <div
+                                        className="h-full bg-[var(--color-alert)] transition-all duration-300"
+                                        style={{ width: `${currentWeaponConf * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                            <span className="text-[14px] font-bold text-white ml-2">{(currentWeaponConf * 100).toFixed(0)}%</span>
+                        </div>
+                    )}
+                    {currentViolenceConf > 0.5 && (
+                        <div className="flex items-center gap-2 bg-black/80 border-l-[3px] border-orange-500 p-2 animate-pulse shadow-[0_0_15px_rgba(255,165,0,0.4)]">
+                            <div className="w-2 h-2 bg-orange-500 rounded-full" />
+                            <div className="flex flex-col">
+                                <span className="text-[10px] font-bold text-orange-500 tracking-widest line-clamp-1">[ VIOLENCE_ANOMALY ]</span>
+                                <div className="w-32 h-1 bg-[var(--color-iron)] mt-1 overflow-hidden">
+                                    <div
+                                        className="h-full bg-orange-500 transition-all duration-300"
+                                        style={{ width: `${currentViolenceConf * 100}%` }}
+                                    />
+                                </div>
+                            </div>
+                            <span className="text-[14px] font-bold text-white ml-2">{(currentViolenceConf * 100).toFixed(0)}%</span>
+                        </div>
+                    )}
+                </div>
+            )}
         </div>
     );
 }

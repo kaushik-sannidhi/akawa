@@ -205,7 +205,7 @@ def _parse_fast_vision_response(data: dict) -> Dict[str, Any]:
     detections = [_format_detection(d) for d in (data.get("detections") or [])]
     per_frame_raw = data.get("per_frame_detections") or {}
     per_frame_formatted = {
-        idx: [_format_detection(d) for d in dets]
+        int(idx): [_format_detection(d) for d in dets]
         for idx, dets in per_frame_raw.items()
     }
 
@@ -213,6 +213,9 @@ def _parse_fast_vision_response(data: dict) -> Dict[str, Any]:
         "detections":           detections,
         "per_frame_detections": per_frame_formatted,
         "threat_type":          data.get("threat_type", "none"),
+        "weapons_detected":     data.get("weapons_detected", False),
+        "violence_detected":    data.get("violence_detected", False),
+        "fall_detected":        data.get("fall_detected", False),
         "weapon_confidence":    data.get("weapon_confidence", 0.0),
         "violence_confidence":  data.get("violence_confidence", 0.0),
         "fall_confidence":      data.get("fall_confidence", 0.0),
@@ -320,12 +323,14 @@ def proxy_fast_vision_frame(
 async def proxy_fast_vision_batch(
     frames: List[np.ndarray],
     video_name: str = "video_batch",
-) -> List[List[Dict[str, Any]]]:
+) -> Dict[str, Any]:
     """
     Async batch path used by the SSE /api/analyze endpoint for uploaded videos.
     Sends SEQUENCE_LENGTH frames, maps the response back to per-frame lists.
+    Returns the full result dict with 'batch_detections' (List[List[Detection]]) added.
     """
-    empty = [[] for _ in frames]
+    empty_result = _parse_fast_vision_response({})
+    empty_result["batch_detections"] = [[] for _ in frames]
     try:
         def _encode():
             bufs = []
@@ -337,7 +342,7 @@ async def proxy_fast_vision_batch(
 
         encoded = await anyio.to_thread.run_sync(_encode)
         if len(encoded) < 2:
-            return empty
+            return empty_result
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -352,24 +357,22 @@ async def proxy_fast_vision_batch(
             )
 
         if resp.status_code != 200:
-            return empty
+            return empty_result
 
-        result      = _parse_fast_vision_response(resp.json())
-        threat_type = result["threat_type"]
-        detections  = result["detections"]
-        batch_out   = [[] for _ in frames]
+        result = _parse_fast_vision_response(resp.json())
+        per_frame_formatted = result.get("per_frame_detections") or {}
+        
+        # Correctly map detections to frames from the per_frame dictionary
+        batch_out = [[] for _ in frames]
+        for i in range(len(frames)):
+            # Modal returns 0-indexed keys within the batch
+            batch_out[i] = per_frame_formatted.get(i, [])
 
-        if threat_type != "none":
-            # Attach all threat detections to the last frame for timeline display.
-            # Person bboxes are excluded here — they're not useful on the upload timeline.
-            threat_dets = [d for d in detections if d.get("is_threat")]
-            if threat_dets:
-                batch_out[-1] = threat_dets
-
-        return batch_out
+        result["batch_detections"] = batch_out
+        return result
     except Exception as e:
         logger.error(f"proxy_fast_vision_batch error: {e}")
-        return empty
+        return empty_result
 
 
 
@@ -656,30 +659,29 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                 batch_timestamps.append(round(frame_idx / fps, 3))
 
                 if len(batch_frames) >= BATCH_SIZE:
-                    batch_detections = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+                    result = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+                    batch_detections = result["batch_detections"]
+                    
+                    # Global scores for this batch
+                    batch_weapon_conf = result.get("weapon_confidence", 0.0)
+                    batch_violence_conf = result.get("violence_confidence", 0.0)
+                    batch_threat_type = result.get("threat_type", "none")
 
                     for i, ts in enumerate(batch_timestamps):
                         sample_count += 1
                         telemetry_service.log_frames(sample_interval, uid)
                         dets = batch_detections[i]
 
-                        threat_type = "none"
-                        if dets:
-                            dt = dets[0].get("detection_type", "person")
-                            if dt == "weapon":
-                                threat_type = "weapon"
-                            elif dt == "fall":
-                                threat_type = "fall"
-                            elif dt == "violent_person":
-                                threat_type = "violence"
-
-                        if threat_type != "none":
-                            telemetry_service.log_anomaly(
-                                "NODE_PREANALYSIS", uid, threat_type=threat_type
-                            )
-
                         progress = sample_count / max(total_samples, 1)
-                        yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'threat_type': threat_type, 'progress': round(min(progress, 1.0), 3)})}\n\n"
+                        yield f"data: {json.dumps({
+                            'type': 'frame', 
+                            'timestamp': ts, 
+                            'detections': dets, 
+                            'threat_type': batch_threat_type, 
+                            'weapon_confidence': batch_weapon_conf,
+                            'violence_confidence': batch_violence_conf,
+                            'progress': round(min(progress, 1.0), 3)
+                        })}\n\n"
 
                     batch_frames     = []
                     batch_timestamps = []
@@ -690,18 +692,25 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
 
         # Flush remaining frames
         if len(batch_frames) >= 2:
-            batch_detections = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+            result = await proxy_fast_vision_batch(batch_frames, video_name=matching[0])
+            batch_detections = result["batch_detections"]
+            batch_weapon_conf = result.get("weapon_confidence", 0.0)
+            batch_violence_conf = result.get("violence_confidence", 0.0)
+            batch_threat_type = result.get("threat_type", "none")
+            
             for i, ts in enumerate(batch_timestamps):
                 sample_count += 1
                 dets = batch_detections[i] if i < len(batch_detections) else []
-                threat_type = "none"
-                if dets:
-                    dt = dets[0].get("detection_type", "person")
-                    threat_type = {"weapon": "weapon", "fall": "fall", "violent_person": "violence"}.get(dt, "none")
-                if threat_type != "none":
-                    telemetry_service.log_anomaly("NODE_PREANALYSIS", uid, threat_type=threat_type)
                 progress = sample_count / max(total_samples, 1)
-                yield f"data: {json.dumps({'type': 'frame', 'timestamp': ts, 'detections': dets, 'threat_type': threat_type, 'progress': round(min(progress, 1.0), 3)})}\n\n"
+                yield f"data: {json.dumps({
+                    'type': 'frame', 
+                    'timestamp': ts, 
+                    'detections': dets, 
+                    'threat_type': batch_threat_type,
+                    'weapon_confidence': batch_weapon_conf,
+                    'violence_confidence': batch_violence_conf,
+                    'progress': round(min(progress, 1.0), 3)
+                })}\n\n"
 
         await anyio.to_thread.run_sync(cap.release)
         yield f"data: {json.dumps({'type': 'done', 'total_analyzed': sample_count})}\n\n"

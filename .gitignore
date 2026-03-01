@@ -44,6 +44,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
 # python
 __pycache__/
 *.py[cod]
@@ -53,4 +54,5 @@ venv/
 env/
 .env
 
-.vercel
+# reports
+backend/reports/

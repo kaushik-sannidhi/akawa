@@ -1,15 +1,9 @@
 export function getBaseUrl() {
-    if (typeof window !== "undefined") {
-        return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    }
-    return process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL || "http://localhost:8000";
+    return "https://akawa.ingeniumstem.org";
 }
 
 export function getWsUrl() {
-    if (typeof window !== "undefined") {
-        return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
-    }
-    return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
+    return "wss://akawa.ingeniumstem.org";
 }
 
 export function getPicowsWsUrl() {
