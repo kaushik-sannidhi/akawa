@@ -83,6 +83,18 @@ export default function StreamNode({
             canvas.width = imageBitmap.width;
             canvas.height = imageBitmap.height;
             ctx.drawImage(imageBitmap, 0, 0);
+        } else if (detections) {
+            // Owner overlay mode: clear canvas so old detections don't stack up.
+            // Size the canvas to the video or container if not yet set.
+            const video = hiddenVideoRef.current;
+            if (video && video.videoWidth > 0) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+            } else if (canvas.width <= 300) {
+                canvas.width = 640;
+                canvas.height = 480;
+            }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
 
         const dw = canvas.width;

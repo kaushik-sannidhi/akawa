@@ -251,18 +251,16 @@ class StreamManager:
             await _safe_close(ws)
         stream.detection_wss.clear()
 
-        for t in list(stream.picows_viewers):
+        for ws in list(stream.picows_viewers):
             try:
-                t.send_close(1000)
-                t.disconnect()
+                await ws.close()
             except Exception:
                 pass
         stream.picows_viewers.clear()
         
-        for t in list(stream.picows_publishers):
+        for ws in list(stream.picows_publishers):
             try:
-                t.send_close(1000)
-                t.disconnect()
+                await ws.close()
             except Exception:
                 pass
         stream.picows_publishers.clear()
@@ -288,7 +286,6 @@ class StreamManager:
         Background task for RTSP/Server streams.
         Captures frames using OpenCV, broadcasts to viewers, and pushes to AI buffer.
         """
-        from picows import WSMsgType
         logger.info(f"[CAPTURE] Starting RTSP capture for {stream.id} source: {stream.source}")
         
         cap = None
@@ -340,16 +337,16 @@ class StreamManager:
                 stream.latest_frame_cv2 = frame
                 stream.push_frame(frame, jpeg_bytes)
                 
-                # Broadcast binary JPEG to all picows viewers
+                # Broadcast binary JPEG to all websocket viewers
                 if stream.picows_viewers:
                     bad = set()
-                    for t in stream.picows_viewers:
+                    for ws in list(stream.picows_viewers):
                         try:
-                            t.send(WSMsgType.BINARY, jpeg_bytes)
+                            await ws.send(jpeg_bytes)
                         except Exception:
-                            bad.add(t)
-                    for t in bad:
-                        stream.picows_viewers.discard(t)
+                            bad.add(ws)
+                    for ws in bad:
+                        stream.picows_viewers.discard(ws)
 
         except Exception as e:
             logger.error(f"[CAPTURE] Error in capture loop for {stream.id}: {e}")
@@ -695,32 +692,11 @@ class StreamManager:
         viewers = list(stream.detection_wss)
         if viewers:
             asyncio.create_task(self._send_all_text(viewers, data_str, stream.detection_wss))
-            
-        picows_viewers = list(stream.picows_viewers)
-        if picows_viewers:
-            from picows import WSMsgType
-            data_bytes = data_str.encode("utf-8")
-            bad = set()
-            for t in picows_viewers:
-                try:
-                    t.send(WSMsgType.TEXT, data_bytes)
-                except Exception:
-                    bad.add(t)
-            for t in bad:
-                stream.picows_viewers.discard(t)
-                
-        picows_publishers = list(getattr(stream, 'picows_publishers', set()))
-        if picows_publishers:
-            from picows import WSMsgType
-            data_bytes = data_str.encode("utf-8")
-            bad = set()
-            for t in picows_publishers:
-                try:
-                    t.send(WSMsgType.TEXT, data_bytes)
-                except Exception:
-                    bad.add(t)
-            for t in bad:
-                stream.picows_publishers.discard(t)
+
+        # Send detection JSON to all websocket viewers and publishers
+        ws_targets = list(stream.picows_viewers) + list(stream.picows_publishers)
+        if ws_targets:
+            asyncio.create_task(self._send_ws_text(ws_targets, data_str, stream))
 
     async def _send_all_text(self, viewers, data_str: str, wss_set: Set[WebSocket]):
         async def _one(ws: WebSocket):
@@ -731,6 +707,15 @@ class StreamManager:
             except Exception:
                 wss_set.discard(ws)
         await asyncio.gather(*[_one(ws) for ws in viewers])
+
+    async def _send_ws_text(self, targets, data_str: str, stream: Stream):
+        """Send text data to websocket viewer/publisher connections."""
+        for ws in targets:
+            try:
+                await asyncio.wait_for(ws.send(data_str), timeout=1.0)
+            except Exception:
+                stream.picows_viewers.discard(ws)
+                stream.picows_publishers.discard(ws)
 
 
 stream_manager = StreamManager()
