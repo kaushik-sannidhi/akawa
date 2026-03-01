@@ -26,15 +26,15 @@ class TestLocalFallbackDefault:
         env.pop("ALLOW_LOCAL_REPORT_FALLBACK", None)
         with patch.dict(os.environ, env, clear=True):
             import app.report_service as rs
-            rs = importlib.reload(rs)
-            assert rs.ALLOW_LOCAL_REPORT_FALLBACK is True
+            reloaded_rs = importlib.reload(rs)
+            assert reloaded_rs.ALLOW_LOCAL_REPORT_FALLBACK is True
 
     def test_allow_local_fallback_can_be_disabled(self):
         """Setting env var to 'false' disables the fallback."""
         with patch.dict(os.environ, {"ALLOW_LOCAL_REPORT_FALLBACK": "false"}, clear=False):
             import app.report_service as rs
-            rs = importlib.reload(rs)
-            assert rs.ALLOW_LOCAL_REPORT_FALLBACK is False
+            reloaded_rs = importlib.reload(rs)
+            assert reloaded_rs.ALLOW_LOCAL_REPORT_FALLBACK is False
 
 
 class TestUploadOrStoreLocalFallback:
