@@ -132,7 +132,7 @@ export default function AlertSidebar({
                                     </div>
 
                                     {/* Report link section (replaces inline VLM text block) */}
-                                    {(alert.reportStatus || alert.reportId || alert.reportUrl || alert.reportPdfUrl || alert.vlmAnalysis === "ANALYZING...") && (
+                                    {(alert.reportStatus || alert.reportId || alert.reportUrl || alert.reportPdfUrl || alert.vlmAnalysis) && (
                                         <div className="mt-2 border-t border-[var(--color-iron)] pt-2 relative">
                                             {(alert.reportStatus === "GENERATING" || alert.vlmAnalysis === "ANALYZING...") && (
                                                 <div className="flex items-center gap-2 text-[10px] text-[var(--color-data)]">
@@ -141,13 +141,14 @@ export default function AlertSidebar({
                                                 </div>
                                             )}
 
-                                            {alert.reportStatus === "FAILED" && (
-                                                <div className="text-[9px] text-[var(--color-alert)] border border-[var(--color-alert)] bg-[var(--color-alert)]/10 px-2 py-1">
-                                                    REPORT_GENERATION_FAILED
+                                            {/* Render VLM text directly if available (and not just "ANALYZING...") */}
+                                            {alert.vlmAnalysis && alert.vlmAnalysis !== "ANALYZING..." && (
+                                                <div className="bg-black/50 border border-[var(--color-iron)] p-2 mb-2 whitespace-pre-wrap text-[9px] text-[var(--color-silica)] leading-relaxed">
+                                                    {alert.vlmAnalysis}
                                                 </div>
                                             )}
 
-                                            {(alert.reportUrl || alert.reportId || alert.reportPdfUrl) && (
+                                            {alert.reportStatus !== "FAILED" && (alert.reportUrl || alert.reportId || alert.reportPdfUrl) && (
                                                 <div className="bg-black/50 border border-[var(--color-iron)] p-2">
                                                     <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 border-b border-[var(--color-iron)] pb-1 whitespace-nowrap">[ INCIDENT_REPORT ]</span>
                                                     <div className="flex gap-2 flex-wrap">

@@ -62,7 +62,13 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
     try:
         while True:
             # Publishers send binary JPEG frames
-            data = await websocket.receive_bytes()
+            try:
+                data = await websocket.receive_bytes()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
+                
             if not data:
                 continue
 
@@ -117,9 +123,14 @@ async def websocket_viewer(websocket: WebSocket, stream_id: str):
     try:
         while True:
             # Viewers might send 'ping' text
-            data = await websocket.receive_text()
-            if data == "ping":
-                await websocket.send_text("pong")
+            try:
+                data = await websocket.receive_text()
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                break
     except WebSocketDisconnect:
         logger.info(f"[WS VIEWER] Disconnected from {stream_id}")
     except Exception as e:

@@ -254,6 +254,8 @@ class StreamManager:
                             await client_ws.send_bytes(msg_payload)
                         else:
                             await client_ws.send_text(msg_payload)
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     pass
                 finally:
@@ -293,6 +295,8 @@ class StreamManager:
         if s._ai_task: s._ai_task.cancel()
         if s._capture_task: s._capture_task.cancel()
         for ws in list(s.viewer_wss | s.publisher_wss | s.detection_wss):
+            if hasattr(ws, "_worker_task"):
+                ws._worker_task.cancel()
             try: await ws.close()
             except: pass
         self.streams.pop(stream_id, None)
