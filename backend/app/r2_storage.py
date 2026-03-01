@@ -2,6 +2,7 @@
 Cloudflare R2 storage integration via S3-compatible API (boto3).
 Provides helpers to upload files and generate presigned URLs.
 """
+from __future__ import annotations
 
 import os
 import logging

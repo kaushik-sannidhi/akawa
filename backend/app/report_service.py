@@ -7,6 +7,8 @@ Handles:
 4) Firebase persistence
 5) Optional report-generated email notification
 """
+from __future__ import annotations
+
 
 import base64
 import logging
