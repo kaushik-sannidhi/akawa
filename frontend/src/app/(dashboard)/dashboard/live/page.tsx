@@ -11,6 +11,27 @@ import { useAuth } from "@/context/AuthContext";
 import { analyzeVideoWithVLM } from "@/lib/vlmApi";
 import { saveSecurityEventToMemory } from "@/lib/supermemoryClient";
 
+const mapClassToThreatType = (className: string): "weapon" | "violence" | "fall" => {
+    const normalized = (className || "").toLowerCase();
+    if (normalized === "fall") return "fall";
+    if (normalized === "violence" || normalized === "fight" || normalized === "violent_person") return "violence";
+    return "weapon";
+};
+
+const makeReportTitle = (threatType: "weapon" | "violence" | "fall", sourceLabel: string) => {
+    if (threatType === "fall") return `Medical Emergency Fall Detected - ${sourceLabel}`;
+    if (threatType === "violence") return `Violent Altercation Detected - ${sourceLabel}`;
+    return `Weapon Detected - ${sourceLabel}`;
+};
+
+const blobToBase64 = async (blob?: Blob | null): Promise<string> => {
+    if (!blob) return "";
+    const buffer = await blob.arrayBuffer();
+    return btoa(
+        new Uint8Array(buffer).reduce((acc, byte) => acc + String.fromCharCode(byte), "")
+    );
+};
+
 export default function LiveStreamPage() {
     const { logSysEvent } = useTelemetry();
     const { user, loading } = useAuth();
@@ -20,6 +41,8 @@ export default function LiveStreamPage() {
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [primaryStreamId, setPrimaryStreamId] = useState<string | null>(null);
     const [alertsPanelOpen, setAlertsPanelOpen] = useState(false);
+    const alertsRef = useRef<any[]>([]);
+    const streamsRef = useRef<any[]>([]);
 
     // Track IDs that are being deleted — prevents them from re-appearing via fetch
     const deletingIdsRef = useRef<Set<string>>(new Set());
@@ -59,6 +82,14 @@ export default function LiveStreamPage() {
         return () => clearInterval(interval);
     }, [fetchStreams, loading]);
 
+    useEffect(() => {
+        alertsRef.current = alerts;
+    }, [alerts]);
+
+    useEffect(() => {
+        streamsRef.current = streams;
+    }, [streams]);
+
     const handleDeleteStream = async (id: string, cascadeDelete: boolean = true) => {
         if (!user?.uid) return;
 
@@ -89,7 +120,7 @@ export default function LiveStreamPage() {
         }, 15000);
     };
 
-    const handleDetections = (detections: any[], timestamp: number) => {
+    const handleDetections = (detections: any[], timestamp: number, streamId: string) => {
         const threats = detections.filter(
             (d: any) =>
                 (d.is_threat ||
@@ -104,6 +135,7 @@ export default function LiveStreamPage() {
                 const updated = [...prev];
                 activeEvents.forEach(event => {
                     const existingIdx = updated.findIndex(a =>
+                        a.streamId === streamId &&
                         a.class_name === event.class_name &&
                         a.endTimestamp !== undefined &&
                         (timestamp - a.endTimestamp) <= 3000
@@ -121,6 +153,7 @@ export default function LiveStreamPage() {
                             class_name: event.detection_type === "violent_person" ? "violence"
                                 : event.detection_type === "fall" ? "fall"
                                     : event.class_name,
+                            streamId,
                             confidence: event.confidence,
                             startTimestamp: timestamp,
                             endTimestamp: timestamp,
@@ -133,16 +166,64 @@ export default function LiveStreamPage() {
         }
     };
 
+    // Attach backend-generated reports to live alerts so sidebar can show "Open Report"
+    useEffect(() => {
+        if (!user?.uid) return;
+
+        const syncReportsToAlerts = async () => {
+            if (alertsRef.current.length === 0) return;
+            try {
+                const res = await fetch(`${getBaseUrl()}/api/reports/${user.uid}?limit=80&_t=${Date.now()}`, {
+                    cache: "no-store",
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                const reports: any[] = data.reports || [];
+                if (reports.length === 0) return;
+
+                setAlerts((prev) =>
+                    prev.map((alert) => {
+                        if (alert.reportId || !alert.streamId) return alert;
+                        const alertTsMs = alert.startTimestamp > 1_000_000_000_000
+                            ? Number(alert.startTimestamp)
+                            : Number(alert.startTimestamp) * 1000;
+                        const expectedThreat = mapClassToThreatType(alert.class_name || "");
+                        const matched = reports.find((r) =>
+                            r.stream_id === alert.streamId &&
+                            Math.abs((r.timestamp || 0) - alertTsMs) <= 45000 &&
+                            (r.threat_type || "") === expectedThreat
+                        );
+                        if (!matched) return alert;
+                        return {
+                            ...alert,
+                            reportStatus: "READY",
+                            reportId: matched.id,
+                            reportUrl: `/dashboard/reports?reportId=${matched.id}`,
+                            reportPdfUrl: matched.pdf_url || "",
+                        };
+                    })
+                );
+            } catch {
+                // Non-fatal sync path
+            }
+        };
+
+        syncReportsToAlerts();
+        const interval = setInterval(syncReportsToAlerts, 8000);
+        return () => clearInterval(interval);
+    }, [user?.uid]);
+
     // Listen for custom event containing the generated WebM clips from live streams
     useEffect(() => {
         const handleClipGenerated = async (e: Event) => {
             const customEvent = e as CustomEvent;
-            const { videoId, timestamp, videoBlob } = customEvent.detail;
+            const { videoId, timestamp, videoBlob, frameBlob } = customEvent.detail;
+            const tsMs = timestamp > 1_000_000_000_000 ? Math.round(timestamp) : Math.round(timestamp * 1000);
 
             // Mark the corresponding alert as currently analyzing
             setAlerts(prev => prev.map(a =>
                 (Math.abs(a.startTimestamp - timestamp) < 5000 && !a.vlmAnalysis)
-                    ? { ...a, vlmAnalysis: "ANALYZING..." }
+                    ? { ...a, vlmAnalysis: "ANALYZING...", reportStatus: "GENERATING" }
                     : a
             ));
 
@@ -164,11 +245,115 @@ export default function LiveStreamPage() {
                 );
                 return updated;
             });
+
+            const uid = user?.uid;
+            if (!uid) return;
+
+            const matchedAlert = alertsRef.current.find((a) => Math.abs((a.startTimestamp ?? 0) - timestamp) < 5000);
+            const className = matchedAlert?.class_name || "weapon";
+            const confidence = typeof matchedAlert?.confidence === "number" ? matchedAlert.confidence : 0.85;
+            const threatType = mapClassToThreatType(className);
+
+            const stream = streamsRef.current.find((s) => s.id === videoId);
+            const cameraName = stream?.name || "Live Camera";
+
+            try {
+                let existingReport: any = null;
+                const listResp = await fetch(`${getBaseUrl()}/api/reports/${uid}?limit=60&_t=${Date.now()}`, { cache: "no-store" });
+                if (listResp.ok) {
+                    const listData = await listResp.json();
+                    existingReport = (listData?.reports || []).find((r: any) =>
+                        r.stream_id === videoId && Math.abs((r.timestamp || 0) - tsMs) <= 30000
+                    );
+                }
+
+                const [clipB64, frameB64] = await Promise.all([
+                    blobToBase64(videoBlob),
+                    blobToBase64(frameBlob),
+                ]);
+
+                let finalReport: any = existingReport;
+
+                if (existingReport) {
+                    await fetch(`${getBaseUrl()}/api/reports/${uid}/${existingReport.id}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            uid,
+                            report_id: existingReport.id,
+                            vlm_summary: response.text || "",
+                            title: existingReport.title || makeReportTitle(threatType, cameraName),
+                            camera_name: existingReport.camera_name || cameraName,
+                            threat_type: existingReport.threat_type || threatType,
+                            confidence: existingReport.confidence || confidence,
+                            timestamp: existingReport.timestamp || tsMs,
+                            frame_b64: frameB64,
+                        }),
+                    });
+                    finalReport = {
+                        ...existingReport,
+                        vlm_summary: response.text || existingReport.vlm_summary || "",
+                    };
+                } else {
+                    const createResp = await fetch(`${getBaseUrl()}/api/reports`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            uid,
+                            title: makeReportTitle(threatType, cameraName),
+                            camera_name: cameraName,
+                            stream_id: videoId || "",
+                            threat_type: threatType,
+                            confidence,
+                            vlm_summary: response.text || "",
+                            frame_b64: frameB64,
+                            clip_b64: clipB64,
+                            detections: [
+                                {
+                                    class_name: className,
+                                    detection_type: threatType === "fall"
+                                        ? "fall"
+                                        : threatType === "violence"
+                                            ? "violent_person"
+                                            : "weapon",
+                                    confidence,
+                                },
+                            ],
+                            timestamp: tsMs,
+                        }),
+                    });
+                    const createData = await createResp.json().catch(() => ({}));
+                    finalReport = createData?.report || null;
+                }
+
+                setAlerts((prev) =>
+                    prev.map((a) =>
+                        Math.abs((a.startTimestamp ?? 0) - timestamp) < 5000
+                            ? {
+                                ...a,
+                                reportStatus: finalReport ? "READY" : "FAILED",
+                                reportId: finalReport?.id || "",
+                                reportUrl: finalReport?.id ? `/dashboard/reports?reportId=${finalReport.id}` : "/dashboard/reports",
+                                reportPdfUrl: finalReport?.pdf_url || "",
+                            }
+                            : a
+                    )
+                );
+            } catch (reportErr) {
+                console.error("Failed to create/patch live report:", reportErr);
+                setAlerts((prev) =>
+                    prev.map((a) =>
+                        Math.abs((a.startTimestamp ?? 0) - timestamp) < 5000
+                            ? { ...a, reportStatus: "FAILED" }
+                            : a
+                    )
+                );
+            }
         };
 
         window.addEventListener('awca_clip_generated', handleClipGenerated);
         return () => window.removeEventListener('awca_clip_generated', handleClipGenerated);
-    }, []);
+    }, [user?.uid]);
 
     const orderedStreams = [...streams].sort((a, b) => {
         if (a.id === primaryStreamId) return -1;
@@ -228,7 +413,7 @@ export default function LiveStreamPage() {
                             key={orderedStreams[0].id}
                             stream={orderedStreams[0]}
                             onDelete={handleDeleteStream}
-                            onDetections={handleDetections}
+                            onDetections={(detections, timestamp) => handleDetections(detections, timestamp, orderedStreams[0].id)}
                             onSelect={() => setPrimaryStreamId(orderedStreams[0].id)}
                             onDoubleClick={() => setPrimaryStreamId(null)}
                             isPrimary={false}
@@ -243,7 +428,7 @@ export default function LiveStreamPage() {
                                 key={orderedStreams[0].id}
                                 stream={orderedStreams[0]}
                                 onDelete={handleDeleteStream}
-                                onDetections={handleDetections}
+                                onDetections={(detections, timestamp) => handleDetections(detections, timestamp, orderedStreams[0].id)}
                                 onSelect={() => { }}
                                 onDoubleClick={() => setPrimaryStreamId(null)}
                                 isPrimary={true}
@@ -256,7 +441,7 @@ export default function LiveStreamPage() {
                                     <StreamNode
                                         stream={s}
                                         onDelete={handleDeleteStream}
-                                        onDetections={handleDetections}
+                                        onDetections={(detections, timestamp) => handleDetections(detections, timestamp, s.id)}
                                         onSelect={() => setPrimaryStreamId(s.id)}
                                         onDoubleClick={() => setPrimaryStreamId(null)}
                                         isPrimary={false}
@@ -276,7 +461,7 @@ export default function LiveStreamPage() {
                                 key={s.id}
                                 stream={s}
                                 onDelete={handleDeleteStream}
-                                onDetections={handleDetections}
+                                onDetections={(detections, timestamp) => handleDetections(detections, timestamp, s.id)}
                                 onSelect={() => setPrimaryStreamId(s.id)}
                                 onDoubleClick={() => setPrimaryStreamId(null)}
                                 isPrimary={false}

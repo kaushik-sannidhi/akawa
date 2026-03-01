@@ -174,6 +174,7 @@ def create_report(
     clip_path: str | None = None,
     clip_bytes: bytes | None = None,
     detections: list | None = None,
+    video_offset_seconds: float | None = None,
     stream_id: str = "",
     timestamp_ms: int | None = None,
 ) -> Dict[str, Any] | None:
@@ -183,8 +184,11 @@ def create_report(
     from app.report_generator import generate_report_pdf
 
     report_id = str(uuid.uuid4())
-    ts_ms = timestamp_ms or int(time.time() * 1000)
+    # Accept either seconds or milliseconds from callers; normalize to ms.
+    raw_ts = timestamp_ms if timestamp_ms is not None else int(time.time() * 1000)
+    ts_ms = int(raw_ts * 1000) if int(raw_ts) < 1_000_000_000_000 else int(raw_ts)
     ts_utc = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).isoformat()
+    safe_conf = max(0.0, min(1.0, float(confidence)))
 
     resolved_clip_path = clip_path or ""
     temp_mp4_path = ""
@@ -216,10 +220,11 @@ def create_report(
             camera_name=camera_name,
             timestamp_ms=ts_ms,
             threat_type=threat_type,
-            confidence=confidence,
+            confidence=safe_conf,
             vlm_summary=summary,
             frame_jpeg_bytes=frame_jpeg_bytes,
             detections=detections or [],
+            video_offset_seconds=video_offset_seconds,
         )
     except Exception as exc:
         logger.error(f"[REPORT] PDF generation failed: {exc}")
@@ -245,7 +250,7 @@ def create_report(
         "camera_name": camera_name,
         "stream_id": stream_id,
         "threat_type": threat_type,
-        "confidence": confidence,
+        "confidence": safe_conf,
         "vlm_summary": summary,
         "timestamp": ts_ms,
         "timestamp_utc": ts_utc,
@@ -253,6 +258,7 @@ def create_report(
         "clip_url": clip_url,
         "frame_url": frame_url,
         "clip_mime_type": clip_mime if clip_url else "",
+        "video_offset_seconds": float(video_offset_seconds) if video_offset_seconds is not None else None,
         "detections_summary": (detections or [])[:8],
         "created_at": int(time.time() * 1000),
     }

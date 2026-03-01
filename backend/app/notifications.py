@@ -167,7 +167,8 @@ class NotificationManager:
         threat = str(report.get("threat_type") or "unknown").upper()
         camera = str(report.get("camera_name") or "Unknown Camera")
         confidence_pct = int(float(report.get("confidence", 0.0)) * 100)
-        ts_ms = int(report.get("timestamp") or int(time.time() * 1000))
+        raw_ts = int(report.get("timestamp") or int(time.time() * 1000))
+        ts_ms = int(raw_ts * 1000) if raw_ts < 1_000_000_000_000 else raw_ts
         timestamp_utc = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime(
             "%Y-%m-%d %H:%M:%S UTC"
         )
@@ -186,6 +187,11 @@ class NotificationManager:
             f"Timestamp: {timestamp_utc}",
             "",
         ]
+        if report.get("video_offset_seconds") is not None:
+            try:
+                lines.append(f"Video Offset: {float(report.get('video_offset_seconds')):.2f}s")
+            except Exception:
+                pass
         if pdf_url:
             lines.append(f"PDF Report: {pdf_url}")
         if clip_url:

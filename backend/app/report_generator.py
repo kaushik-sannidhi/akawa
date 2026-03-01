@@ -11,12 +11,17 @@ from reportlab.lib.colors import HexColor, black
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    Image,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 logger = logging.getLogger(__name__)
 
-COLOR_ALERT = HexColor("#FF3300")
-COLOR_DATA = HexColor("#FFFFFF")
 COLOR_IRON = HexColor("#333333")
 COLOR_SILICA = HexColor("#888888")
 
@@ -31,6 +36,38 @@ def _escape_for_paragraph(text: str) -> str:
     )
 
 
+def _build_detection_table(doc_width: float, detections: list[dict[str, Any]]) -> Table:
+    rows = [["CLASS", "TYPE", "CONF"]]
+    for det in detections[:6]:
+        rows.append(
+            [
+                str(det.get("class_name", "unknown")).upper(),
+                str(det.get("detection_type", "unknown")).upper(),
+                f"{int(float(det.get('confidence', 0.0)) * 100)}%",
+            ]
+        )
+    table = Table(rows, colWidths=[doc_width * 0.42, doc_width * 0.34, doc_width * 0.24])
+    table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, 0), "Courier-Bold"),
+                ("FONTNAME", (0, 1), (-1, -1), "Courier"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TEXTCOLOR", (0, 0), (-1, 0), COLOR_IRON),
+                ("TEXTCOLOR", (0, 1), (-1, -1), black),
+                ("BACKGROUND", (0, 0), (-1, 0), HexColor("#EFEFEF")),
+                ("GRID", (0, 0), (-1, -1), 0.5, COLOR_IRON),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
+    )
+    return table
+
+
 def generate_report_pdf(
     title: str,
     camera_name: str,
@@ -40,63 +77,63 @@ def generate_report_pdf(
     vlm_summary: str,
     frame_jpeg_bytes: bytes | None = None,
     detections: list[dict[str, Any]] | None = None,
+    video_offset_seconds: float | None = None,
 ) -> bytes:
     """
-    Build an incident report PDF in-memory and return raw bytes.
+    Build a one-page style incident report PDF with side-by-side frame + AI analysis.
     """
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
         pagesize=A4,
-        topMargin=20 * mm,
-        bottomMargin=20 * mm,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+        leftMargin=14 * mm,
+        rightMargin=14 * mm,
     )
 
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
-        "ReportTitle",
+        "Title",
         parent=styles["Title"],
         fontName="Courier-Bold",
-        fontSize=21,
-        leading=25,
+        fontSize=18,
+        leading=21,
         textColor=black,
-        spaceAfter=3 * mm,
-    )
-    subtitle_style = ParagraphStyle(
-        "ReportSubtitle",
-        parent=styles["Normal"],
-        fontName="Courier",
-        fontSize=9,
-        leading=12,
-        textColor=COLOR_IRON,
         spaceAfter=2 * mm,
     )
-    section_header = ParagraphStyle(
-        "SectionHeader",
+    subtitle_style = ParagraphStyle(
+        "Subtitle",
+        parent=styles["Normal"],
+        fontName="Courier",
+        fontSize=8,
+        leading=10,
+        textColor=COLOR_IRON,
+    )
+    section_style = ParagraphStyle(
+        "Section",
         parent=styles["Heading2"],
         fontName="Courier-Bold",
-        fontSize=11,
-        leading=14,
+        fontSize=10,
+        leading=12,
         textColor=black,
-        spaceBefore=5 * mm,
-        spaceAfter=3 * mm,
+        spaceBefore=2 * mm,
+        spaceAfter=1 * mm,
     )
     body_style = ParagraphStyle(
         "Body",
         parent=styles["Normal"],
         fontName="Courier",
-        fontSize=10,
-        leading=14,
+        fontSize=9,
+        leading=12,
         textColor=black,
     )
-    small_style = ParagraphStyle(
-        "Small",
+    footer_style = ParagraphStyle(
+        "Footer",
         parent=styles["Normal"],
         fontName="Courier",
-        fontSize=8,
-        leading=10,
+        fontSize=7,
+        leading=9,
         textColor=COLOR_SILICA,
     )
 
@@ -106,114 +143,103 @@ def generate_report_pdf(
         "fall": "MEDICAL EMERGENCY FALL",
     }
     threat_label = threat_label_map.get((threat_type or "").lower(), (threat_type or "UNKNOWN").upper())
-
-    incident_ts = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-    incident_ts_str = incident_ts.strftime("%Y-%m-%d %H:%M:%S UTC")
-    generated_ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    incident_ts = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+    generated_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     story = []
     story.append(Paragraph("AKAWA INCIDENT REPORT", title_style))
-    story.append(Paragraph(f"Generated: {generated_ts_str}", subtitle_style))
+    story.append(Paragraph(f"Generated: {generated_ts}", subtitle_style))
 
-    divider = Table([[""]], colWidths=[doc.width])
-    divider.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 2, black)]))
-    story.append(divider)
-    story.append(Spacer(1, 4 * mm))
-
-    story.append(Paragraph("[ INCIDENT DETAILS ]", section_header))
-    meta_data = [
-        ["TITLE", title],
-        ["THREAT TYPE", threat_label],
-        ["CONFIDENCE", f"{int(max(0.0, min(1.0, confidence)) * 100)}%"],
-        ["CAMERA", camera_name],
-        ["TIMESTAMP", incident_ts_str],
-    ]
-    meta_table = Table(meta_data, colWidths=[38 * mm, doc.width - 38 * mm])
-    meta_table.setStyle(
+    header_table = Table(
+        [
+            ["TITLE", title],
+            ["THREAT", threat_label],
+            ["CONFIDENCE", f"{int(max(0.0, min(1.0, confidence)) * 100)}%"],
+            ["CAMERA", camera_name],
+            ["TIMESTAMP", incident_ts],
+        ] + (
+            [["VIDEO OFFSET", f"{video_offset_seconds:.2f}s"]] if video_offset_seconds is not None else []
+        ),
+        colWidths=[26 * mm, doc.width - 26 * mm],
+    )
+    header_table.setStyle(
         TableStyle(
             [
                 ("FONTNAME", (0, 0), (0, -1), "Courier-Bold"),
                 ("FONTNAME", (1, 0), (1, -1), "Courier"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("TEXTCOLOR", (0, 0), (0, -1), COLOR_IRON),
                 ("TEXTCOLOR", (1, 0), (1, -1), black),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ("LINEBELOW", (0, -1), (-1, -1), 0.5, COLOR_IRON),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LINEBELOW", (0, -1), (-1, -1), 0.8, COLOR_IRON),
             ]
         )
     )
-    story.append(meta_table)
-    story.append(Spacer(1, 4 * mm))
+    story.append(header_table)
+    story.append(Spacer(1, 3 * mm))
 
-    if detections:
-        story.append(Paragraph("[ DETECTION BREAKDOWN ]", section_header))
-        rows = [["CLASS", "TYPE", "CONF"]]
-        for det in detections[:8]:
-            rows.append(
-                [
-                    str(det.get("class_name", "unknown")).upper(),
-                    str(det.get("detection_type", "unknown")).upper(),
-                    f"{int(float(det.get('confidence', 0.0)) * 100)}%",
-                ]
-            )
-        det_table = Table(rows, colWidths=[doc.width * 0.4, doc.width * 0.35, doc.width * 0.25])
-        det_table.setStyle(
-            TableStyle(
-                [
-                    ("FONTNAME", (0, 0), (-1, 0), "Courier-Bold"),
-                    ("FONTNAME", (0, 1), (-1, -1), "Courier"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), COLOR_IRON),
-                    ("TEXTCOLOR", (0, 1), (-1, -1), black),
-                    ("BACKGROUND", (0, 0), (-1, 0), HexColor("#EFEFEF")),
-                    ("GRID", (0, 0), (-1, -1), 0.5, COLOR_IRON),
-                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ]
-            )
-        )
-        story.append(det_table)
-        story.append(Spacer(1, 4 * mm))
+    left_col_width = doc.width * 0.52
+    right_col_width = doc.width - left_col_width
 
     if frame_jpeg_bytes:
-        story.append(Paragraph("[ CAPTURED FRAME ]", section_header))
         try:
-            img_buf = io.BytesIO(frame_jpeg_bytes)
-            img = Image(img_buf)
-            max_width = doc.width
-            max_height = 110 * mm
-            iw, ih = img.imageWidth, img.imageHeight
-            ratio = min(max_width / max(iw, 1), max_height / max(ih, 1))
-            img.drawWidth = iw * ratio
-            img.drawHeight = ih * ratio
-            story.append(img)
-            story.append(Spacer(1, 4 * mm))
+            img = Image(io.BytesIO(frame_jpeg_bytes))
+            max_w = left_col_width - 8
+            max_h = 125 * mm
+            ratio = min(max_w / max(img.imageWidth, 1), max_h / max(img.imageHeight, 1))
+            img.drawWidth = img.imageWidth * ratio
+            img.drawHeight = img.imageHeight * ratio
+            left_cell: Any = img
         except Exception as exc:
             logger.error(f"[PDF] Failed embedding frame image: {exc}")
-
-    story.append(Paragraph("[ AI ANALYSIS ]", section_header))
-    if (vlm_summary or "").strip():
-        story.append(Paragraph(_escape_for_paragraph(vlm_summary), body_style))
+            left_cell = Paragraph("Captured frame unavailable.", body_style)
     else:
-        story.append(Paragraph("No VLM analysis available for this incident.", body_style))
+        left_cell = Paragraph("Captured frame unavailable.", body_style)
 
-    story.append(Spacer(1, 8 * mm))
-    footer_divider = Table([[""]], colWidths=[doc.width])
-    footer_divider.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 1, COLOR_IRON)]))
-    story.append(footer_divider)
-    story.append(Spacer(1, 2 * mm))
+    safe_summary = (vlm_summary or "").strip()
+    # Keep the analysis concise enough to preserve one-page layout.
+    if len(safe_summary) > 1700:
+        safe_summary = f"{safe_summary[:1700].rstrip()}... [TRUNCATED]"
+    safe_summary = _escape_for_paragraph(safe_summary) if safe_summary else "No VLM analysis available."
+
+    right_flowables: list[Any] = [
+        Paragraph("[ AI ANALYSIS ]", section_style),
+        Paragraph(safe_summary, body_style),
+    ]
+    if detections:
+        right_flowables.extend(
+            [
+                Spacer(1, 2 * mm),
+                Paragraph("[ DETECTION BREAKDOWN ]", section_style),
+                _build_detection_table(right_col_width - 6, detections),
+            ]
+        )
+
+    two_col = Table([[left_cell, right_flowables]], colWidths=[left_col_width, right_col_width])
+    two_col.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LINEAFTER", (0, 0), (0, 0), 0.6, COLOR_IRON),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("BOX", (0, 0), (-1, -1), 0.8, COLOR_IRON),
+            ]
+        )
+    )
+    story.append(two_col)
+
+    story.append(Spacer(1, 3 * mm))
     story.append(
         Paragraph(
-            (
-                "Automatically generated by AKAWA threat detection. "
-                "All detections should be validated by trained personnel."
-            ),
-            small_style,
+            "Automatically generated by AKAWA threat detection. Validate all detections with trained personnel.",
+            footer_style,
         )
     )
 

@@ -18,6 +18,10 @@ import httpx
 import anyio
 import subprocess
 import time as _time
+from dotenv import load_dotenv
+
+# Load backend/.env so storage/email/runtime settings are applied in local runs.
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 logger = logging.getLogger(__name__)
 
@@ -1041,6 +1045,7 @@ class CreateReportRequest(BaseModel):
     frame_b64: str = ""
     clip_b64: str = ""
     detections: List[Dict[str, Any]] = Field(default_factory=list)
+    video_offset_seconds: Optional[float] = None
     timestamp: Optional[int] = None
 
 
@@ -1074,6 +1079,7 @@ async def create_report_endpoint(req: CreateReportRequest):
             frame_jpeg_bytes=frame_bytes,
             clip_bytes=clip_bytes,
             detections=req.detections,
+            video_offset_seconds=req.video_offset_seconds,
             stream_id=req.stream_id,
             timestamp_ms=req.timestamp,
         )

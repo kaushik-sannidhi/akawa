@@ -126,7 +126,7 @@ export default function UploadAnalysisPage() {
             // Mark the corresponding alert as currently analyzing
             setAlerts(prev => prev.map(a =>
                 (Math.abs(a.startTimestamp - timestamp) < 5.0 && !a.vlmAnalysis)
-                    ? { ...a, vlmAnalysis: "ANALYZING..." }
+                    ? { ...a, vlmAnalysis: "ANALYZING...", reportStatus: "GENERATING" }
                     : a
             ));
 
@@ -160,7 +160,7 @@ export default function UploadAnalysisPage() {
                     blobToBase64(frameBlob),
                 ]);
 
-                await fetch(`${getBaseUrl()}/api/reports`, {
+                const reportResp = await fetch(`${getBaseUrl()}/api/reports`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -184,11 +184,36 @@ export default function UploadAnalysisPage() {
                                 confidence,
                             },
                         ],
-                        timestamp: Math.round(timestamp * 1000),
+                        video_offset_seconds: Number(timestamp),
+                        timestamp: Date.now(),
                     }),
                 });
+
+                const reportData = await reportResp.json().catch(() => ({}));
+                const report = reportData?.report;
+
+                setAlerts((prev) =>
+                    prev.map((a) =>
+                        Math.abs((a.startTimestamp ?? 0) - timestamp) < 5.0
+                            ? {
+                                ...a,
+                                reportStatus: report ? "READY" : "FAILED",
+                                reportId: report?.id || "",
+                                reportUrl: report?.id ? `/dashboard/reports?reportId=${report.id}` : "/dashboard/reports",
+                                reportPdfUrl: report?.pdf_url || "",
+                            }
+                            : a
+                    )
+                );
             } catch (reportErr) {
                 console.error("Failed to create upload incident report:", reportErr);
+                setAlerts((prev) =>
+                    prev.map((a) =>
+                        Math.abs((a.startTimestamp ?? 0) - timestamp) < 5.0
+                            ? { ...a, reportStatus: "FAILED" }
+                            : a
+                    )
+                );
             }
         };
 

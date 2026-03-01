@@ -1,5 +1,6 @@
 "use client";
 
+import { getBaseUrl } from "@/lib/config";
 import { X } from "lucide-react";
 
 const WEAPON_CLASSES = ["gun", "knife"];
@@ -15,6 +16,13 @@ export default function AlertSidebar({
     onClear?: (id: any) => void;
     onClearAll?: () => void;
 }) {
+    const resolveAssetUrl = (url: string) => {
+        if (!url) return "";
+        if (url.startsWith("http://") || url.startsWith("https://")) return url;
+        if (url.startsWith("/")) return `${getBaseUrl()}${url}`;
+        return `${getBaseUrl()}/${url}`;
+    };
+
     return (
         <div className="w-full h-full flex flex-col bg-black border-[2px] border-[var(--color-iron)] font-mono text-xs uppercase tracking-widest text-[var(--color-data)]">
             <div className="px-4 py-3 border-b-[2px] border-[var(--color-iron)] flex justify-between items-center bg-[var(--color-dim)]">
@@ -101,20 +109,45 @@ export default function AlertSidebar({
                                         <span className="text-[8px] opacity-50">NODE_01</span>
                                     </div>
 
-                                    {/* VLM Analysis Section */}
-                                    {alert.vlmAnalysis && (
+                                    {/* Report link section (replaces inline VLM text block) */}
+                                    {(alert.reportStatus || alert.reportId || alert.reportUrl || alert.reportPdfUrl || alert.vlmAnalysis === "ANALYZING...") && (
                                         <div className="mt-2 border-t border-[var(--color-iron)] pt-2 relative">
-                                            {alert.vlmAnalysis === "ANALYZING..." ? (
+                                            {(alert.reportStatus === "GENERATING" || alert.vlmAnalysis === "ANALYZING...") && (
                                                 <div className="flex items-center gap-2 text-[10px] text-[var(--color-data)]">
                                                     <div className="w-1.5 h-1.5 bg-[var(--color-data)] animate-ping rounded-full" />
-                                                    <span>VLM_ANALYSIS_IN_PROGRESS...</span>
+                                                    <span>GENERATING_INCIDENT_REPORT...</span>
                                                 </div>
-                                            ) : (
+                                            )}
+
+                                            {alert.reportStatus === "FAILED" && (
+                                                <div className="text-[9px] text-[var(--color-alert)] border border-[var(--color-alert)] bg-[var(--color-alert)]/10 px-2 py-1">
+                                                    REPORT_GENERATION_FAILED
+                                                </div>
+                                            )}
+
+                                            {(alert.reportUrl || alert.reportId || alert.reportPdfUrl) && (
                                                 <div className="bg-black/50 border border-[var(--color-iron)] p-2">
-                                                    <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 border-b border-[var(--color-iron)] pb-1 whitespace-nowrap">[ DEEP_VISION_LOG ]</span>
-                                                    <p className="text-[9px] text-[var(--color-data)] leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto custom-scrollbar">
-                                                        {alert.vlmAnalysis}
-                                                    </p>
+                                                    <span className="text-[8px] text-[var(--color-silica)] font-bold block mb-1 border-b border-[var(--color-iron)] pb-1 whitespace-nowrap">[ INCIDENT_REPORT ]</span>
+                                                    <div className="flex gap-2 flex-wrap">
+                                                        <a
+                                                            href={alert.reportUrl || (alert.reportId ? `/dashboard/reports?reportId=${alert.reportId}` : "/dashboard/reports")}
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            className="text-[9px] text-[var(--color-data)] border border-[var(--color-data)] px-2 py-1 hover:bg-[var(--color-data)] hover:text-black transition-none"
+                                                        >
+                                                            OPEN REPORT
+                                                        </a>
+                                                        {alert.reportPdfUrl && (
+                                                            <a
+                                                                href={resolveAssetUrl(alert.reportPdfUrl)}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                onClick={(e) => e.stopPropagation()}
+                                                                className="text-[9px] text-[var(--color-silica)] border border-[var(--color-iron)] px-2 py-1 hover:bg-white hover:text-black transition-none"
+                                                            >
+                                                                VIEW PDF
+                                                            </a>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             )}
                                         </div>

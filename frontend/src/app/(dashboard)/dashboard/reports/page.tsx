@@ -3,6 +3,7 @@
 import { useAuth } from "@/context/AuthContext";
 import { getBaseUrl } from "@/lib/config";
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { FileText, Download, Play, Trash2, Filter, RefreshCw, AlertTriangle, Swords, HeartPulse, ChevronDown, X, Eye } from "lucide-react";
 
 interface Report {
@@ -18,6 +19,7 @@ interface Report {
     pdf_url: string;
     clip_url: string;
     frame_url: string;
+    video_offset_seconds?: number | null;
     created_at: number;
 }
 
@@ -29,6 +31,8 @@ const THREAT_CONFIG: Record<string, { label: string; color: string; icon: typeof
 
 export default function ReportsPage() {
     const { user } = useAuth();
+    const searchParams = useSearchParams();
+    const preselectedReportId = searchParams.get("reportId");
     const [reports, setReports] = useState<Report[]>([]);
     const [loading, setLoading] = useState(true);
     const [filterType, setFilterType] = useState<string>("all");
@@ -58,6 +62,14 @@ export default function ReportsPage() {
         return () => clearInterval(interval);
     }, [fetchReports]);
 
+    useEffect(() => {
+        if (!preselectedReportId || reports.length === 0) return;
+        const exists = reports.some((r) => r.id === preselectedReportId);
+        if (exists) {
+            setExpandedReport(preselectedReportId);
+        }
+    }, [preselectedReportId, reports]);
+
     const handleDelete = async (reportId: string) => {
         if (!user?.uid) return;
         setReports(prev => prev.filter(r => r.id !== reportId));
@@ -79,13 +91,25 @@ export default function ReportsPage() {
         ? reports
         : reports.filter(r => r.threat_type === filterType);
 
-    const formatTimestamp = (ms: number) => {
-        const d = new Date(ms);
+    const normalizeTsMs = (value: number) => {
+        const n = Number(value || 0);
+        if (n <= 0) return 0;
+        return n < 1_000_000_000_000 ? Math.round(n * 1000) : Math.round(n);
+    };
+
+    const formatTimestampLocal = (ms: number) => {
+        const d = new Date(normalizeTsMs(ms));
         return d.toLocaleString("en-US", {
             year: "numeric", month: "short", day: "2-digit",
             hour: "2-digit", minute: "2-digit", second: "2-digit",
             hour12: false,
         });
+    };
+
+    const formatTimestampUtc = (ms: number) => {
+        const d = new Date(normalizeTsMs(ms));
+        if (!Number.isFinite(d.getTime())) return "INVALID_TIMESTAMP";
+        return d.toISOString().replace("T", " ").replace("Z", " UTC");
     };
 
     return (
@@ -200,7 +224,11 @@ export default function ReportsPage() {
                                         </h3>
                                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[var(--color-silica)]">
                                             <span>CAM: {report.camera_name}</span>
-                                            <span>TS: {formatTimestamp(report.timestamp)}</span>
+                                            <span>LOCAL: {formatTimestampLocal(report.timestamp)}</span>
+                                            <span>UTC: {formatTimestampUtc(report.timestamp)}</span>
+                                            {typeof report.video_offset_seconds === "number" && (
+                                                <span>OFFSET: {report.video_offset_seconds.toFixed(2)}s</span>
+                                            )}
                                         </div>
                                     </div>
 

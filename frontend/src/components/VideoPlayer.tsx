@@ -143,6 +143,7 @@ export default function VideoPlayer({
         try {
             const hiddenVideo = document.createElement("video");
             hiddenVideo.crossOrigin = "anonymous";
+            hiddenVideo.preload = "auto";
             hiddenVideo.src = `${getBaseUrl()}${videoUrl}`;
             hiddenVideo.muted = true;
             hiddenVideo.playsInline = true;
@@ -154,18 +155,41 @@ export default function VideoPlayer({
 
             // we want to capture from timestamp - 2 to timestamp + 3
             const startTime = Math.max(0, timestamp - 2);
-            hiddenVideo.currentTime = startTime;
-
-            await new Promise((resolve, reject) => {
-                hiddenVideo.oncanplay = resolve;
-                hiddenVideo.onerror = reject;
+            await new Promise<void>((resolve, reject) => {
+                if (Math.abs(hiddenVideo.currentTime - startTime) < 0.01 && hiddenVideo.readyState >= 2) {
+                    resolve();
+                    return;
+                }
+                const onSeeked = () => {
+                    hiddenVideo.removeEventListener("seeked", onSeeked);
+                    hiddenVideo.removeEventListener("error", onError);
+                    clearTimeout(fallbackTimer);
+                    resolve();
+                };
+                const onError = () => {
+                    hiddenVideo.removeEventListener("seeked", onSeeked);
+                    hiddenVideo.removeEventListener("error", onError);
+                    clearTimeout(fallbackTimer);
+                    reject(new Error("Failed seeking hidden video"));
+                };
+                const fallbackTimer = setTimeout(() => {
+                    hiddenVideo.removeEventListener("seeked", onSeeked);
+                    hiddenVideo.removeEventListener("error", onError);
+                    resolve();
+                }, 800);
+                hiddenVideo.addEventListener("seeked", onSeeked);
+                hiddenVideo.addEventListener("error", onError);
+                hiddenVideo.currentTime = startTime;
             });
+
+            // Give the decoder a brief moment to paint a real frame.
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
             const renderCanvas = document.createElement("canvas");
             renderCanvas.width = hiddenVideo.videoWidth;
             renderCanvas.height = hiddenVideo.videoHeight;
             const ctx = renderCanvas.getContext("2d");
-            if (ctx && hiddenVideo.readyState >= 2) {
+            if (ctx && hiddenVideo.readyState >= 2 && hiddenVideo.videoWidth > 0 && hiddenVideo.videoHeight > 0) {
                 ctx.drawImage(hiddenVideo, 0, 0, renderCanvas.width, renderCanvas.height);
             }
             const frameBlob = await new Promise<Blob | null>((resolve) =>

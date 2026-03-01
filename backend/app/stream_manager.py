@@ -462,6 +462,41 @@ class StreamManager:
             stream.alert_frames = []
             return
 
+        def _select_representative_frame(alert_frames: list) -> bytes | None:
+            """
+            Pick a non-black frame for snapshots.
+            Chooses the brightest decodable frame from sampled positions.
+            """
+            if not alert_frames:
+                return None
+            sample_idx = sorted(
+                set(
+                    [
+                        0,
+                        len(alert_frames) // 4,
+                        len(alert_frames) // 2,
+                        (3 * len(alert_frames)) // 4,
+                        len(alert_frames) - 1,
+                    ]
+                )
+            )
+            best_bytes = None
+            best_score = -1.0
+            for idx in sample_idx:
+                try:
+                    jpg_bytes = alert_frames[idx][1]
+                    frame = cv2.imdecode(np.frombuffer(jpg_bytes, np.uint8), cv2.IMREAD_COLOR)
+                    if frame is None:
+                        continue
+                    # Mean grayscale intensity; avoids black/near-black captures.
+                    score = float(np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)))
+                    if score > best_score:
+                        best_score = score
+                        best_bytes = jpg_bytes
+                except Exception:
+                    continue
+            return best_bytes or alert_frames[len(alert_frames) // 2][1]
+
         try:
             event_id = str(uuid.uuid4())
             uid_dir  = os.path.join(ALERT_CLIPS_DIR, stream.uid)
@@ -469,8 +504,12 @@ class StreamManager:
             clip_filename = f"{event_id}.avi"
             clip_path     = os.path.join(uid_dir, clip_filename)
 
+            representative_jpg = _select_representative_frame(stream.alert_frames)
+            if not representative_jpg:
+                stream.alert_frames = []
+                return
             first_frame = cv2.imdecode(
-                np.frombuffer(stream.alert_frames[0][1], np.uint8), cv2.IMREAD_COLOR
+                np.frombuffer(representative_jpg, np.uint8), cv2.IMREAD_COLOR
             )
             if first_frame is None:
                 stream.alert_frames = []
@@ -519,8 +558,8 @@ class StreamManager:
             # ── Auto-generate incident report ──────────────────────
             try:
                 from app.report_service import create_report
-                # Use the first frame as the snapshot for the report
-                frame_jpeg = stream.alert_frames[0][1] if stream.alert_frames else None
+                # Use a representative non-black frame as the report snapshot
+                frame_jpeg = representative_jpg
                 threat_dets = [d for d in stream.latest_detections[:5] if _is_threat_detection(d)]
                 top_conf = max((d.get("confidence", 0.0) for d in threat_dets), default=0.85)
 
