@@ -888,8 +888,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
         return
 
     logger.info(f"[WS IN] Camera provider connected on stream {stream_id}")
-    stream.status = "active"
-    stream_manager.ensure_ai_task(stream)
+    await stream_manager.activate_stream(stream)
 
     def _decode_jpeg(jpeg_bytes: bytes):
         np_arr = np.frombuffer(jpeg_bytes, np.uint8)
@@ -923,7 +922,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
         logger.error(f"[WS IN] Error on stream {stream_id}: {e}")
     finally:
         if stream_manager.get_stream(stream_id):
-            stream.status = "waiting_for_client"
+            await stream_manager.deactivate_stream(stream)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -938,6 +937,7 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
     if not stream:
         await websocket.close(code=1008)
         return
+    await stream_manager.activate_stream(stream)
     stream.viewer_wss.add(websocket)
     try:
         while stream._running and stream_manager.get_stream(stream_id):
@@ -948,6 +948,7 @@ async def websocket_stream_out(websocket: WebSocket, stream_id: str):
         pass
     finally:
         stream.viewer_wss.discard(websocket)
+        await stream_manager.deactivate_stream(stream)
 
 
 @app.websocket("/ws/detections/{stream_id}")
@@ -958,6 +959,7 @@ async def websocket_detections(websocket: WebSocket, stream_id: str):
     if not stream:
         await websocket.close(code=1008)
         return
+    await stream_manager.activate_stream(stream)
     stream.detection_wss.add(websocket)
     try:
         while stream._running and stream_manager.get_stream(stream_id):
@@ -971,6 +973,7 @@ async def websocket_detections(websocket: WebSocket, stream_id: str):
         pass
     finally:
         stream.detection_wss.discard(websocket)
+        await stream_manager.deactivate_stream(stream)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

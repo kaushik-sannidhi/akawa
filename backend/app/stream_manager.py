@@ -129,6 +129,8 @@ class Stream:
         self._ai_task = None
         self._capture_task = None
         self._broadcast_task = None
+        self._active_count = 0  # Number of active viewers/listeners
+        self._stop_timer = None
 
     def push_frame(self, frame) -> bool:
         """
@@ -183,23 +185,65 @@ class StreamManager:
         self._update_telemetry_nodes(uid)
 
         if stream.type in ["rtsp", "server_cam"]:
-            stream._running = True
-            stream.status = "active"
-            stream._capture_task = asyncio.create_task(
-                self._capture_and_broadcast_loop(stream))
-            stream._ai_task = asyncio.create_task(self._ai_loop(stream))
+            stream.status = "standby"
+            # We don't start loops here; they start on viewer join
 
         elif stream.type == "client_cam":
             stream.status = "waiting_for_client"
-            stream._running = True
-            if not skip_ai:
-                stream._ai_task = asyncio.create_task(self._ai_loop(stream))
-            stream._broadcast_task = asyncio.create_task(self._viewer_broadcast_loop(stream))
+            # client_cam AI/broadcast loops are also managed lazily
 
         return stream
 
+    async def activate_stream(self, stream: Stream):
+        """Enable processing loops for this stream if not already running."""
+        stream._active_count += 1
+        if stream._active_count == 1:
+            if stream._stop_timer:
+                stream._stop_timer.cancel()
+                stream._stop_timer = None
+
+            if not stream._running:
+                logger.info(f"Activating stream loops for: {stream.id}")
+                stream._running = True
+                stream.status = "active"
+                if stream.type in ["rtsp", "server_cam"]:
+                    stream._capture_task = asyncio.create_task(self._capture_and_broadcast_loop(stream))
+                    stream._ai_task = asyncio.create_task(self._ai_loop(stream))
+                elif stream.type == "client_cam":
+                    stream._ai_task = asyncio.create_task(self._ai_loop(stream))
+                    stream._broadcast_task = asyncio.create_task(self._viewer_broadcast_loop(stream))
+
+    async def deactivate_stream(self, stream: Stream):
+        """Decrement active count and stop loops after a delay if no one is left."""
+        stream._active_count = max(0, stream._active_count - 1)
+        if stream._active_count == 0:
+            # Wait 30s before stopping to avoid flapping on page refreshes
+            if stream._stop_timer:
+                stream._stop_timer.cancel()
+            stream._stop_timer = asyncio.create_task(self._delayed_stop(stream))
+
+    async def _delayed_stop(self, stream: Stream):
+        await asyncio.sleep(30.0)
+        if stream._active_count == 0 and stream._running:
+            logger.info(f"Deactivating stream loops (inactive): {stream.id}")
+            stream._running = False
+            stream.status = "standby"
+            for task in [stream._ai_task, stream._capture_task, stream._broadcast_task]:
+                if task:
+                    task.cancel()
+            stream._ai_task = None
+            stream._capture_task = None
+            stream._broadcast_task = None
+            # Clear memory-heavy fields
+            stream.latest_frame_cv2 = None
+            stream.latest_frame_b64 = ""
+            stream._frame_buffer.clear()
+            stream.alert_frames = []
+            import gc
+            gc.collect()
+
     def ensure_ai_task(self, stream: Stream):
-        if stream._ai_task is None or stream._ai_task.done():
+        if stream._running and (stream._ai_task is None or stream._ai_task.done()):
             stream._ai_task = asyncio.create_task(self._ai_loop(stream))
 
     async def remove_stream(self, stream_id: str):
@@ -498,8 +542,8 @@ class StreamManager:
                     ret, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
                     if ret:
                         stream.alert_frames.append((now, bytes(buf)))
-                    if len(stream.alert_frames) > 300:
-                        stream.alert_frames = stream.alert_frames[-300:]
+                    if len(stream.alert_frames) > 150:
+                        stream.alert_frames = stream.alert_frames[-150:]
                 except Exception:
                     pass
         else:
