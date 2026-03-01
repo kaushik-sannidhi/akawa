@@ -1,6 +1,9 @@
 /** Primary backend via Cloudflare Tunnel — ALWAYS tried first */
 const CF_TUNNEL_URL = "https://backend.itsakawa.tech";
 
+/** Local backend for development */
+const LOCAL_URL = "http://localhost:8000";
+
 /** Fallback backend on Render — used only when the tunnel is unreachable */
 const RENDER_URL = "https://akawa.onrender.com";
 
@@ -35,14 +38,14 @@ export const checkBackendHealth = async (url: string, timeoutMs = 5000): Promise
 /**
  * Returns the best available backend base URL.
  *
- * Before the background health check completes it returns `CF_TUNNEL_URL`
- * (the Cloudflare Tunnel). Once `resolveBaseUrl()` finishes, subsequent
- * calls transparently return whichever URL is actually healthy — falling
- * back to Render only when the tunnel is down.
+ * Before the background health check completes it returns `LOCAL_URL` in dev,
+ * or `CF_TUNNEL_URL`. Once `resolveBaseUrl()` finishes, subsequent
+ * calls transparently return whichever URL is actually healthy.
  */
 export const getBaseUrl = (): string => {
     if (_resolvedUrl) return _resolvedUrl;
-    // Before the health check resolves, always prefer the tunnel.
+    // Before the health check resolves, prefer local in dev, otherwise tunnel.
+    if (process.env.NODE_ENV === "development") return LOCAL_URL;
     return CF_TUNNEL_URL;
 };
 
@@ -57,8 +60,8 @@ export const getWsUrl = (): string => {
 /**
  * Resolves the best available backend URL at runtime.
  *
- * **Always** tries the Cloudflare Tunnel first; falls back to Render only
- * when the tunnel is unreachable or unhealthy. Result is cached for
+ * **Always** tries the Cloudflare Tunnel first; falls back to localhost (if dev)
+ * or Render when the tunnel is unreachable or unhealthy. Result is cached for
  * `RESOLVE_CACHE_TTL` (60 s) to avoid probing on every request.
  */
 export const resolveBaseUrl = async (timeoutMs = 4000): Promise<string> => {
@@ -75,8 +78,16 @@ export const resolveBaseUrl = async (timeoutMs = 4000): Promise<string> => {
         return _resolvedUrl;
     }
 
-    // Tunnel is down — try Render as fallback.
-    console.warn("[akawa] Cloudflare Tunnel unreachable, trying Render fallback…");
+    console.warn("[akawa] Cloudflare Tunnel unreachable, trying local fallback…");
+    const localOk = await checkBackendHealth(LOCAL_URL, timeoutMs);
+    if (localOk) {
+        _resolvedUrl = LOCAL_URL;
+        _resolvedAt = now;
+        return _resolvedUrl;
+    }
+
+    // Tunnel and local are down — try Render as fallback.
+    console.warn("[akawa] Local fallback unreachable, trying Render fallback…");
     const renderOk = await checkBackendHealth(RENDER_URL, timeoutMs);
     if (renderOk) {
         _resolvedUrl = RENDER_URL;
@@ -84,9 +95,9 @@ export const resolveBaseUrl = async (timeoutMs = 4000): Promise<string> => {
         return _resolvedUrl;
     }
 
-    // Both are down — default to the tunnel (best-effort).
-    console.warn("[akawa] Both backends unreachable — defaulting to Cloudflare Tunnel.");
-    _resolvedUrl = CF_TUNNEL_URL;
+    // All are down — default to the local or tunnel (best-effort).
+    console.warn("[akawa] All backends unreachable — defaulting to initial.");
+    _resolvedUrl = process.env.NODE_ENV === "development" ? LOCAL_URL : CF_TUNNEL_URL;
     _resolvedAt = now;
     return _resolvedUrl;
 };
@@ -109,6 +120,8 @@ if (typeof window !== "undefined") {
     resolveBaseUrl().then((url) => {
         if (url === RENDER_URL) {
             console.info(`[akawa] Using Render fallback: ${url}`);
+        } else if (url === LOCAL_URL) {
+            console.info(`[akawa] Using Local fallback: ${url}`);
         } else {
             console.info(`[akawa] Using Cloudflare Tunnel: ${url}`);
         }
