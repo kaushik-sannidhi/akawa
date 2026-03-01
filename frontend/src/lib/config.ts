@@ -1,25 +1,8 @@
 export function getBaseUrl() {
-    if (typeof window !== "undefined") {
-        const host = window.location.hostname;
-        if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.")) {
-            return `http://${host}:8000`;
-        }
-        // Use current domain for API calls
-        return `${window.location.protocol}//${host}`;
-    }
     return "https://akawa.ingeniumstem.org";
 }
 
 export function getWsUrl(path: string = "") {
-    if (typeof window !== "undefined") {
-        const host = window.location.hostname;
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        if (host === "localhost" || host === "127.0.0.1" || host.startsWith("192.168.") || host.startsWith("10.")) {
-            return `ws://${host}:8000${path}`;
-        }
-        // Use current domain for WebSocket
-        return `${protocol}//${host}${path}`;
-    }
     return `wss://akawa.ingeniumstem.org${path}`;
 }
 
