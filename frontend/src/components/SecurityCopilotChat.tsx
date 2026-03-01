@@ -28,7 +28,7 @@ export default function SecurityCopilotChat() {
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0.8, opacity: 0 }}
                     onClick={() => setIsOpen(true)}
-                    className="fixed bottom-6 right-24 z-50 w-16 h-16 flex items-center justify-center bg-[var(--color-data)] text-black border-2 border-black hover:bg-black hover:text-[var(--color-data)] hover:border-[var(--color-data)] group transition-all duration-300 shadow-[0_0_20px_rgba(0,255,102,0.3)]"
+                    className="fixed bottom-6 right-6 z-50 w-16 h-16 flex items-center justify-center bg-[var(--color-alert)] text-black border-2 border-black hover:bg-black hover:text-[var(--color-alert)] hover:border-[var(--color-alert)] group transition-all duration-300 shadow-[0_0_20px_rgba(255,51,0,0.3)]"
                     title="Initialize Security Copilot"
                 >
                     <Terminal className="w-8 h-8 group-hover:scale-110 transition-transform" />
@@ -40,11 +40,11 @@ export default function SecurityCopilotChat() {
                     animate={{ y: 0, opacity: 1, scale: 1 }}
                     exit={{ y: 50, opacity: 0, scale: 0.95 }}
                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                    className="fixed bottom-6 right-24 z-50 w-[400px] h-[600px] max-w-[calc(100vw-3rem)] max-h-[calc(100vh-8rem)] bg-[var(--color-void)] border-2 border-[var(--color-iron)] shadow-2xl flex flex-col font-mono"
+                    className="fixed bottom-6 right-6 z-50 w-[400px] h-[600px] max-w-[calc(100vw-3rem)] max-h-[calc(100vh-8rem)] bg-[var(--color-void)] border-2 border-[var(--color-iron)] shadow-2xl flex flex-col font-mono"
                 >
                     {/* Header */}
                     <div className="bg-black border-b-2 border-[var(--color-iron)] p-3 flex justify-between items-center cursor-default shrink-0">
-                        <div className="flex items-center gap-2 text-[var(--color-data)] font-mono text-sm font-bold tracking-widest">
+                        <div className="flex items-center gap-2 text-[var(--color-alert)] font-mono text-sm font-bold tracking-widest">
                             <Terminal className="w-4 h-4" />
                             [ SECURITY_COPILOT ]
                         </div>
@@ -88,18 +88,18 @@ export default function SecurityCopilotChat() {
                         {/* Input Area */}
                         <div className="p-4 border-t-2 border-[var(--color-iron)] bg-black shrink-0">
                             <form onSubmit={handleSubmit} className="flex gap-2 relative">
-                                <div className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-[var(--color-data)] pointer-events-none">&gt;</div>
+                                <div className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-[var(--color-alert)] pointer-events-none">&gt;</div>
                                 <input
                                     type="text"
                                     value={input}
                                     onChange={handleInputChange}
                                     placeholder="Enter forensic query..."
-                                    className="flex-1 bg-[var(--color-void)] border-2 border-[var(--color-iron)] text-white p-3 pl-8 text-sm focus:outline-none focus:border-[var(--color-data)] transition-colors placeholder:text-[var(--color-iron)] font-mono"
+                                    className="flex-1 bg-[var(--color-void)] border-2 border-[var(--color-iron)] text-white p-3 pl-8 text-sm focus:outline-none focus:border-[var(--color-alert)] transition-colors placeholder:text-[var(--color-iron)] font-mono"
                                 />
                                 <button
                                     type="submit"
                                     disabled={isLoading || !input.trim()}
-                                    className="px-4 bg-[var(--color-data)] text-black border-2 border-transparent hover:bg-black hover:text-[var(--color-data)] hover:border-[var(--color-data)] font-bold transition-none disabled:opacity-50"
+                                    className="px-4 bg-[var(--color-alert)] text-black border-2 border-transparent hover:bg-black hover:text-[var(--color-alert)] hover:border-[var(--color-alert)] font-bold transition-none disabled:opacity-50"
                                 >
                                     <Send className="w-5 h-5" />
                                 </button>
@@ -108,8 +108,8 @@ export default function SecurityCopilotChat() {
                     </div>
 
                     {/* Aesthetic Corner Accents */}
-                    <div className="absolute top-0 left-0 w-2 h-2 bg-[var(--color-data)] -translate-x-[2px] -translate-y-[2px]" />
-                    <div className="absolute bottom-0 right-0 w-2 h-2 bg-[var(--color-data)] translate-x-[2px] translate-y-[2px]" />
+                    <div className="absolute top-0 left-0 w-2 h-2 bg-[var(--color-alert)] -translate-x-[2px] -translate-y-[2px]" />
+                    <div className="absolute bottom-0 right-0 w-2 h-2 bg-[var(--color-alert)] translate-x-[2px] translate-y-[2px]" />
                 </motion.div>
             )}
         </AnimatePresence>
