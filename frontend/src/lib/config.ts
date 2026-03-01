@@ -1,7 +1,7 @@
 export const getBaseUrl = () => {
 
     // Fallback for local development
-    return "https://akawa.onrender.com";
+    return "akawa-production.up.railway.app";
 };
 
 export const getWsUrl = () => {
