@@ -44,6 +44,7 @@ export default function StreamNode({
     const rafRef = useRef<number>(0);
     const lastDetectionsRaw = useRef<any[]>([]);
     const weaponSeenStartRef = useRef<number | null>(null);
+    const lastFrameRef = useRef<ImageBitmap | null>(null);
 
     const isOwner = useMemo(
         () => stream.device_id === localDeviceId && !!localDeviceId,
@@ -84,12 +85,15 @@ export default function StreamNode({
         if (!ctx) return;
 
         if (imageBitmap) {
-            canvas.width = imageBitmap.width;
-            canvas.height = imageBitmap.height;
-            ctx.drawImage(imageBitmap, 0, 0);
-        } else if (detections) {
-            // Owner overlay mode: clear canvas so old detections don't stack up.
-            // Size the canvas to the video or container if not yet set.
+            lastFrameRef.current = imageBitmap;
+        }
+
+        if (lastFrameRef.current && !isOwner) {
+            canvas.width = lastFrameRef.current.width;
+            canvas.height = lastFrameRef.current.height;
+            ctx.drawImage(lastFrameRef.current, 0, 0);
+        } else {
+            // Owner mode relies on the hidden video tag underneath, so we clear the canvas
             const video = hiddenVideoRef.current;
             if (video && video.videoWidth > 0) {
                 canvas.width = video.videoWidth;

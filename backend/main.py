@@ -85,8 +85,8 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
                     st.latest_frame_cv2 = cv2_frame
                     st.push_frame(cv2_frame, jpeg_bytes)
 
-            # Offload decoding to a thread to not block the event loop
-            anyio.from_thread.run(_decode_and_push, data, stream)
+            # Offload decoding to a background task so we don't block the stream
+            asyncio.create_task(anyio.to_thread.run_sync(_decode_and_push, data, stream))
 
     except WebSocketDisconnect:
         logger.info(f"[WS PUBLISHER] Disconnected from {stream_id}")
