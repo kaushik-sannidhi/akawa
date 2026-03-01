@@ -48,6 +48,7 @@ default_origins = [
     "https://akawa.vercel.app",
     "https://akawa.onrender.com",
     "https://back.itsakawa.tech",
+    "https://server.itsakawa.tech"
 ]
 
 def _env_flag(name: str, default: bool = False) -> bool:
