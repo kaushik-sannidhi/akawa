@@ -4,6 +4,8 @@ import { getBaseUrl } from "@/lib/config";
 import { X } from "lucide-react";
 
 const WEAPON_CLASSES = ["gun", "knife"];
+const VIOLENCE_CLASSES = ["violence", "violent_person", "fight"];
+const FALL_CLASSES = ["fall"];
 
 export default function AlertSidebar({
     alerts,
@@ -52,19 +54,39 @@ export default function AlertSidebar({
                     ) : (
                         alerts.map((alert, i) => {
                             const isWeapon = WEAPON_CLASSES.includes(alert.class_name);
+                            const isViolence = VIOLENCE_CLASSES.includes(alert.class_name);
+                            const isFall = FALL_CLASSES.includes(alert.class_name);
                             const borderColor = isWeapon
                                 ? "border-[var(--color-alert)]"
-                                : "border-[var(--color-iron)]";
+                                : isViolence
+                                    ? "border-orange-500"
+                                    : isFall
+                                        ? "border-yellow-500"
+                                        : "border-[var(--color-iron)]";
                             const textColor = isWeapon
                                 ? "text-[var(--color-alert)]"
-                                : "text-[var(--color-data)]";
+                                : isViolence
+                                    ? "text-orange-500"
+                                    : isFall
+                                        ? "text-yellow-500"
+                                        : "text-[var(--color-data)]";
                             const bgColor = isWeapon
                                 ? "bg-[var(--color-alert)]/10"
-                                : "bg-[var(--color-dim)]";
+                                : isViolence
+                                    ? "bg-orange-500/10"
+                                    : isFall
+                                        ? "bg-yellow-500/10"
+                                        : "bg-[var(--color-dim)]";
 
                             // Display label: unify weapons under "WEAPON"
                             const displayLabel = isWeapon ? "WEAPON" : alert.class_name.toUpperCase();
-                            const displayType = isWeapon ? "[ KINETIC_THREAT ]" : "[ SYS_OBJECT ]";
+                            const displayType = isWeapon
+                                ? "[ KINETIC_THREAT ]"
+                                : isViolence
+                                    ? "[ VIOLENT_ALTERCATION ]"
+                                    : isFall
+                                        ? "[ MEDICAL_EMERGENCY ]"
+                                        : "[ SYS_OBJECT ]";
 
                             return (
                                 <div
