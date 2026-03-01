@@ -370,35 +370,28 @@ export default function LandingPage() {
                     <div className="md:col-span-3 p-8 md:p-12 lg:p-16 border-b-[2px] md:border-b-0 md:border-r-[2px] border-[var(--color-iron)] relative bg-[var(--color-dim)] flex flex-col justify-center">
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.5)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.5)_1px,transparent_1px)] bg-[size:32px_32px] opacity-20 pointer-events-none" />
 
-                        <div className="relative z-10 mix-blend-difference animate-slide-in-bottom">
-                            <h1 className="text-[2.8rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-8 text-[var(--color-data)] tracking-tighter overflow-hidden animate-float-subtle-large break-all sm:break-normal">
-                                <ScrambleText text="SENTIENT" delay={500} /><br />
-                                <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="DEFENSE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
-                            </h1>
+                        <h1 className="text-[2.8rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-4 text-[var(--color-data)] tracking-tighter overflow-hidden animate-float-subtle-large break-all sm:break-normal">
+                            <ScrambleText text="SENTIENT" delay={500} /><br />
+                            <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="DEFENSE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
+                        </h1>
 
-                            <div className="max-w-2xl font-mono text-xs sm:text-sm leading-relaxed mt-10 mb-10 border-[1px] border-[var(--color-iron)] bg-[var(--color-void)] p-4 shadow-[4px_4px_0px_var(--color-iron)] hover:border-[var(--color-data)] hover:shadow-[4px_4px_0px_var(--color-data)] transition-colors animate-slide-in-bottom stagger-1 z-10 relative cursor-crosshair">
-                                <div className="font-bold text-[var(--color-data)] mb-2 flex justify-between border-b border-[var(--color-iron)] pb-2">
-                                    <span>// PROJECT_AKAWA_OVERVIEW</span>
-                                    <span className="hidden sm:inline-block animate-pulse text-[var(--color-alert)]">SYS_READY</span>
-                                </div>
-                                <p className="text-[var(--color-silica)] uppercase">
-                                    AN ADVANCED AI-DRIVEN THREAT DETECTION SYSTEM. LEVERAGING EDGE-OPTIMIZED COMPUTER VISION TO IDENTIFY FIREARMS, AGGRESSIVE KINETIC BEHAVIORS, AND MEDICAL EMERGENCIES INSTANTLY. REMOVING THE HUMAN BOTTLENECK FROM LIVE SURVEILLANCE.
-                                </p>
-                            </div>
+                        <div className="w-24 h-4 bg-[var(--color-alert)] mb-16 animate-slide-in-bottom stagger-1" />
 
-                            <div className="max-w-2xl font-mono text-sm leading-relaxed text-[var(--color-silica)] mb-12 border-l-[4px] border-[var(--color-alert)] pl-4 bg-[var(--color-void)] p-4 border-y border-r border-[#333] animate-slide-in-bottom stagger-2 animate-float-subtle">
-                                <p className="mb-4 text-[var(--color-alert)] font-bold">// TWO-STAGE ARCHITECTURE:</p>
-                                <p>
-                                    TRANSFORM PASSIVE CAMPUS HARDWARE INTO AN UNBLINKING PROACTIVE DEFENSE GRID. <span className="text-white font-bold bg-[#333] px-1">YOLOv11</span> FOR RAPID WEAPON CLASSIFICATION. <span className="text-white font-bold bg-[#333] px-1">LMST MODEL</span> FOR KINEMATIC STANCE TRACKING.
-                                </p>
+                        <div className="max-w-2xl font-mono text-xs sm:text-sm leading-relaxed mt-16 mb-20 border-[1px] border-[var(--color-iron)] bg-[var(--color-void)] p-4 shadow-[4px_4px_0px_var(--color-iron)] hover:border-[var(--color-data)] hover:shadow-[4px_4px_0px_var(--color-data)] transition-colors animate-slide-in-bottom stagger-2 z-10 relative cursor-crosshair">
+                            <div className="font-bold text-[var(--color-data)] mb-2 flex justify-between border-b border-[var(--color-iron)] pb-2">
+                                <span>// PROJECT_AKAWA_OVERVIEW</span>
+                                <span className="hidden sm:inline-block animate-pulse text-[var(--color-alert)]">SYS_READY</span>
                             </div>
+                            <p className="text-[var(--color-silica)] uppercase">
+                                AN ADVANCED AI-DRIVEN THREAT DETECTION SYSTEM. LEVERAGING EDGE-OPTIMIZED COMPUTER VISION TO IDENTIFY FIREARMS, AGGRESSIVE KINETIC BEHAVIORS, AND MEDICAL EMERGENCIES INSTANTLY. REMOVING THE HUMAN BOTTLENECK FROM LIVE SURVEILLANCE.
+                            </p>
+                        </div>
 
-                            <div className="flex flex-col sm:flex-row gap-0 animate-slide-in-bottom stagger-3">
-                                <Link href="/signup" className="btn-alert text-xl md:text-2xl py-6 px-8 flex-1 text-center font-bold relative overflow-hidden group">
-                                    <span className="relative z-10">[ DEPLOY_INSTANCE ]</span>
-                                    <div className="absolute inset-0 bg-white translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-in-out z-0"></div>
-                                </Link>
-                            </div>
+                        <div className="flex flex-col sm:flex-row gap-0 animate-slide-in-bottom stagger-3">
+                            <Link href="/signup" className="btn-alert text-xl md:text-2xl py-6 px-8 flex-1 text-center font-bold relative overflow-hidden group">
+                                <span className="relative z-10">[ DEPLOY_INSTANCE ]</span>
+                                <div className="absolute inset-0 bg-white translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-in-out z-0"></div>
+                            </Link>
                         </div>
                     </div>
 
@@ -857,6 +850,6 @@ export default function LandingPage() {
                     [ INITIALIZE_SYSTEM_ACCESS ]
                 </Link>
             </div>
-        </div>
+        </div >
     );
 }
