@@ -670,15 +670,22 @@ async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous"
     try:
         await anyio.to_thread.run_sync(_transcode_video, orig_path, final_path)
     except Exception as ffmpeg_exc:
-        logger.warning(f"ffmpeg transcode failed, falling back to copy: {ffmpeg_exc}")
-        os.replace(orig_path, final_path)
-        transcode_mode = "copy"
+        logger.warning(f"ffmpeg transcode failed, falling back to OpenCV: {ffmpeg_exc}")
+        try:
+            # Second-tier fallback: Use OpenCV to re-encode the video.
+            # This is more robust than a simple copy for browser-uploaded formats (.webm, etc.)
+            await anyio.to_thread.run_sync(_transcode_video_opencv, orig_path, final_path)
+            transcode_mode = "opencv"
+        except Exception as cv_exc:
+            logger.warning(f"OpenCV transcode fallback also failed, falling back to raw copy: {cv_exc}")
+            os.replace(orig_path, final_path)
+            transcode_mode = "copy"
     finally:
         if os.path.exists(final_path) and os.path.exists(orig_path):
             try:
                 os.remove(orig_path)
-            except Exception:
-                pass
+            except Exception as rm_exc:
+                logger.debug(f"Failed to remove original upload {orig_path}: {rm_exc}")
 
     if not os.path.exists(final_path):
         raise HTTPException(status_code=500, detail="Upload completed but no output video was produced.")
