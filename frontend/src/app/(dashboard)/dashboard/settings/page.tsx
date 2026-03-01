@@ -23,28 +23,12 @@ export default function SettingsPage() {
         notificationSettings, setNotificationSettings,
         saveNotificationSettings, notificationsLoaded,
     } = useSettings();
-    const [models, setModels] = useState<ModelOption[]>([]);
-    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [newContact, setNewContact] = useState<Record<string, string>>({ gun: "", knife: "", fall: "", fight: "" });
     const [newReportContact, setNewReportContact] = useState("");
 
     const displayConfidence = Math.round(confidenceThreshold * 100);
-
-    useEffect(() => {
-        const fetchModels = async () => {
-            try {
-                const res = await fetch(`${getBaseUrl()}/api/models`);
-                const data = await res.json();
-                setModels(data.models || []);
-            } catch (err) {
-                console.error("Failed to fetch models:", err);
-                setModels([{ id: "latest", name: "Latest (Auto-Select)" }]);
-            }
-        };
-        fetchModels().finally(() => setLoading(false));
-    }, []);
 
     const handleCommit = async () => {
         setSaving(true);
@@ -106,51 +90,6 @@ export default function SettingsPage() {
                 <h1 className="text-2xl font-black">[ SYSTEM_CONFIGURATION ]</h1>
                 <p className="text-xs text-[var(--color-silica)] mt-2 border-l-[2px] border-[var(--color-data)] pl-2">ADJUST INFERENCE ENGINE, MODEL SELECTION, AND ALERT ROUTING PROTOCOLS.</p>
             </div>
-
-            {/* Model Selection */}
-            <section className="bg-black border-[2px] border-[var(--color-iron)] p-6 structure-block">
-                <h2 className="text-[10px] font-bold text-[var(--color-silica)] border-b border-[var(--color-iron)] pb-2 mb-6">[ ACTIVE_MODEL ]</h2>
-
-                <div className="space-y-4">
-                    <div className="flex flex-col gap-2">
-                        <span className="font-bold text-xs">SELECT DETECTION MODEL</span>
-                        {loading ? (
-                            <div className="text-[10px] text-[var(--color-silica)] animate-pulse">SCANNING MODELS...</div>
-                        ) : (
-                            <select
-                                value={selectedModel}
-                                onChange={(e) => setSelectedModel(e.target.value)}
-                                className="bg-black border-[2px] border-[var(--color-iron)] text-[var(--color-data)] px-4 py-3 font-mono text-xs uppercase tracking-widest appearance-none cursor-crosshair hover:border-[var(--color-alert)] focus:border-[var(--color-alert)] focus:outline-none transition-none"
-                            >
-                                {models.map((m) => (
-                                    <option key={m.id} value={m.id} className="bg-black text-[var(--color-data)]">
-                                        {m.name}
-                                    </option>
-                                ))}
-                            </select>
-                        )}
-                        <p className="text-[10px] text-[var(--color-silica)]">
-                            TRAINED MODELS ARE DISCOVERED FROM RUNS/DETECT/. THIS APPLIES TO VIDEO ANALYSIS, LIVE FEED, AND CCTV.
-                        </p>
-                    </div>
-
-                    <div className="flex items-start justify-between border-[2px] border-[var(--color-alert)] p-4 bg-[var(--color-alert)]/10 mt-4">
-                        <div>
-                            <h3 className="font-bold text-lg mb-1 text-[var(--color-alert)]">
-                                {models.find((m) => m.id === selectedModel)?.name || selectedModel.toUpperCase()}
-                            </h3>
-                            <p className="text-xs text-[var(--color-silica)]">
-                                {selectedModel === "latest"
-                                    ? "AUTO-SELECTS THE MOST RECENTLY TRAINED MODEL FROM RUNS/DETECT/."
-                                    : `USING SPECIFIC MODEL: ${selectedModel.toUpperCase()}`}
-                            </p>
-                        </div>
-                        <div className="w-6 h-6 border-[2px] border-current text-[var(--color-alert)] flex items-center justify-center">
-                            <div className="w-3 h-3 bg-current" />
-                        </div>
-                    </div>
-                </div>
-            </section>
 
             {/* Global Thresholds */}
             <section className="bg-black border-[2px] border-[var(--color-iron)] p-6">
