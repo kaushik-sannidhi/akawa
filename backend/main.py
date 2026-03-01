@@ -75,7 +75,7 @@ async def websocket_stream_in(websocket: WebSocket, stream_id: str):
 
             # Broadcast bytes to all viewers
             if stream.viewer_wss:
-                asyncio.create_task(stream_manager._broadcast_binary(stream, data))
+                await stream_manager._broadcast_binary(stream, data)
 
             # Decode for AI sequence
             def _decode_and_push(jpeg_bytes, st):
@@ -110,6 +110,7 @@ async def websocket_viewer(websocket: WebSocket, stream_id: str):
         return
 
     stream.viewer_wss.add(websocket)
+    await stream_manager.activate_stream(stream)
     logger.info(f"[WS VIEWER] Connected to {stream_id}")
 
     try:
@@ -124,6 +125,7 @@ async def websocket_viewer(websocket: WebSocket, stream_id: str):
         logger.error(f"[WS VIEWER] Error: {e}")
     finally:
         stream.viewer_wss.discard(websocket)
+        await stream_manager.deactivate_stream(stream)
 
 
 @app.websocket("/ws/detections/{stream_id}")
@@ -245,7 +247,6 @@ def _restore_streams_from_firebase(uid_filter: Optional[str] = None):
                     model_id=st_data.get("model_id", "latest"),
                     device_id=st_data.get("device_id", ""),
                     stream_id=st_id,
-                    skip_ai=(st_data.get("type") == "client_cam"),
                 )
                 print(f"[RESTORE] {st_id} ({st_data.get('type')}) for {user_uid}")
     except Exception as exc:

@@ -222,9 +222,9 @@ export default function StreamDialog({ isOpen, onClose, onStreamAdded }: StreamD
                     )}
 
                     <div className="border border-[var(--color-iron)]/50 bg-[var(--color-data)]/5 p-2 text-[9px] text-[var(--color-data)] mt-2">
-                        {sourceType === "client_cam" 
-                            ? "PICOWS WEBSOCKET - ULTRA LOW LATENCY STREAMING. BROWSER WILL ENCODE AND PUBLISH TO SERVER."
-                            : "SERVER CAPTURE - THE BACKEND WILL CAPTURE RTSP AND BROADCAST TO ALL VIEWERS VIA PICOWS."}
+                        {sourceType === "client_cam"
+                            ? "FASTAPI WEBSOCKET - ULTRA LOW LATENCY STREAMING. BROWSER WILL ENCODE AND PUBLISH TO SERVER."
+                            : "SERVER CAPTURE - THE BACKEND WILL CAPTURE RTSP AND BROADCAST TO ALL VIEWERS VIA FASTAPI."}
                         <br />
                         AI INFERENCE RUNS AUTOMATICALLY FOR ALL ACTIVE STREAMS.
                     </div>

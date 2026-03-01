@@ -194,17 +194,25 @@ export default function StreamNode({
 
         const connectCamera = async () => {
             try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } },
+                const isClientCam = stream.type === "client_cam";
+                const deviceIdConstraint = isClientCam && stream.source && stream.source !== "local"
+                    ? { exact: stream.source } : undefined;
+
+                const constraints: MediaStreamConstraints = {
+                    video: deviceIdConstraint
+                        ? { deviceId: deviceIdConstraint, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } }
+                        : { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 15 } },
                     audio: true,
-                });
+                };
+
+                const userMediaStream = await navigator.mediaDevices.getUserMedia(constraints);
                 if (!alive) {
-                    stream.getTracks().forEach((t) => t.stop());
+                    userMediaStream.getTracks().forEach((t) => t.stop());
                     return;
                 }
-                localStreamRef.current = stream;
+                localStreamRef.current = userMediaStream;
                 if (hiddenVideoRef.current) {
-                    hiddenVideoRef.current.srcObject = stream;
+                    hiddenVideoRef.current.srcObject = userMediaStream;
                 }
             } catch (e) {
                 console.error("Failed to access camera:", e);
@@ -375,7 +383,7 @@ export default function StreamNode({
                     className={`bg-black text-[var(--color-data)] px-2 font-bold ${isPrimary ? "text-[10px]" : "text-[8px]"
                         } border-[1px] border-[var(--color-iron)] truncate max-w-[180px] whitespace-nowrap`}
                 >
-                    {stream.name} [PICOWS_NODE]
+                    {stream.name} [FASTAPI_NODE]
                 </span>
                 <div className="flex gap-1">
                     <span
