@@ -1,7 +1,7 @@
-/** Primary backend via Cloudflare Tunnel */
+/** Primary backend via Cloudflare Tunnel — ALWAYS tried first */
 const CF_TUNNEL_URL = "https://backend.itsakawa.tech";
 
-/** Fallback backend on Render */
+/** Fallback backend on Render — used only when the tunnel is unreachable */
 const RENDER_URL = "https://akawa.onrender.com";
 
 // ── Runtime resolution cache ──────────────────────────────────────────────────
@@ -34,23 +34,19 @@ export const checkBackendHealth = async (url: string, timeoutMs = 5000): Promise
 
 /**
  * Returns the best available backend base URL.
- * On first call it returns the env-configured or default (tunnel) URL.
- * After the background health check resolves (a few seconds after page load),
- * subsequent calls return the health-checked URL — automatically switching to
- * the Render fallback if the Cloudflare Tunnel is down.
+ *
+ * Before the background health check completes it returns `CF_TUNNEL_URL`
+ * (the Cloudflare Tunnel). Once `resolveBaseUrl()` finishes, subsequent
+ * calls transparently return whichever URL is actually healthy — falling
+ * back to Render only when the tunnel is down.
  */
-export const getBaseUrl = () => {
+export const getBaseUrl = (): string => {
     if (_resolvedUrl) return _resolvedUrl;
-    if (process.env.NEXT_PUBLIC_API_URL) {
-        return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "");
-    }
+    // Before the health check resolves, always prefer the tunnel.
     return CF_TUNNEL_URL;
 };
 
-export const getWsUrl = () => {
-    if (process.env.NEXT_PUBLIC_WS_URL) {
-        return process.env.NEXT_PUBLIC_WS_URL.replace(/\/$/, "");
-    }
+export const getWsUrl = (): string => {
     return getBaseUrl()
         .replace(/^https:\/\//, "wss://")
         .replace(/^http:\/\//, "ws://");
@@ -60,9 +56,10 @@ export const getWsUrl = () => {
 
 /**
  * Resolves the best available backend URL at runtime.
- * Tries the primary URL first (Cloudflare Tunnel by default); falls back to
- * the other endpoint if the primary is unreachable.
- * Result is cached for RESOLVE_CACHE_TTL to avoid repeated probing.
+ *
+ * **Always** tries the Cloudflare Tunnel first; falls back to Render only
+ * when the tunnel is unreachable or unhealthy. Result is cached for
+ * `RESOLVE_CACHE_TTL` (60 s) to avoid probing on every request.
  */
 export const resolveBaseUrl = async (timeoutMs = 4000): Promise<string> => {
     const now = Date.now();
@@ -70,19 +67,26 @@ export const resolveBaseUrl = async (timeoutMs = 4000): Promise<string> => {
         return _resolvedUrl;
     }
 
-    // getBaseUrl() returns env var or CF_TUNNEL_URL (no cache yet during probe)
-    const envUrl = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? CF_TUNNEL_URL;
-    const fallback = envUrl === RENDER_URL ? CF_TUNNEL_URL : RENDER_URL;
-
-    const primaryOk = await checkBackendHealth(envUrl, timeoutMs);
-    if (primaryOk) {
-        _resolvedUrl = envUrl;
+    // Always probe the Cloudflare Tunnel first, regardless of env vars.
+    const tunnelOk = await checkBackendHealth(CF_TUNNEL_URL, timeoutMs);
+    if (tunnelOk) {
+        _resolvedUrl = CF_TUNNEL_URL;
         _resolvedAt = now;
         return _resolvedUrl;
     }
 
-    const fallbackOk = await checkBackendHealth(fallback, timeoutMs);
-    _resolvedUrl = fallbackOk ? fallback : envUrl; // best-effort even if both fail
+    // Tunnel is down — try Render as fallback.
+    console.warn("[akawa] Cloudflare Tunnel unreachable, trying Render fallback…");
+    const renderOk = await checkBackendHealth(RENDER_URL, timeoutMs);
+    if (renderOk) {
+        _resolvedUrl = RENDER_URL;
+        _resolvedAt = now;
+        return _resolvedUrl;
+    }
+
+    // Both are down — default to the tunnel (best-effort).
+    console.warn("[akawa] Both backends unreachable — defaulting to Cloudflare Tunnel.");
+    _resolvedUrl = CF_TUNNEL_URL;
     _resolvedAt = now;
     return _resolvedUrl;
 };
@@ -103,9 +107,10 @@ export const resolveWsUrl = async (timeoutMs = 4000): Promise<string> => {
 // the right (possibly fallback) URL.
 if (typeof window !== "undefined") {
     resolveBaseUrl().then((url) => {
-        const configured = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? CF_TUNNEL_URL;
-        if (url !== configured) {
-            console.info(`[akawa] Cloudflare Tunnel unavailable — falling back to: ${url}`);
+        if (url === RENDER_URL) {
+            console.info(`[akawa] Using Render fallback: ${url}`);
+        } else {
+            console.info(`[akawa] Using Cloudflare Tunnel: ${url}`);
         }
     });
 }
