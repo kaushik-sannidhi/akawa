@@ -245,7 +245,7 @@ export default function StreamNode({
 
                 pingInterval = setInterval(() => {
                     if (ws?.readyState === WebSocket.OPEN) ws.send(new Blob([]));
-                }, 15000);
+                }, 5000);
 
                 const publishLoop = (now: number) => {
                     if (!alive) return;
@@ -317,7 +317,7 @@ export default function StreamNode({
                 }
                 pingInterval = setInterval(() => {
                     if (ws?.readyState === WebSocket.OPEN) ws.send("ping");
-                }, 20000);
+                }, 5000);
             };
 
             ws.onmessage = async (event) => {
