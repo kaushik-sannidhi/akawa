@@ -44,7 +44,7 @@ REQUIRE_R2_REPORT_UPLOADS = os.getenv("REQUIRE_R2_REPORT_UPLOADS", "true").strip
     "false",
     "no",
 )
-ALLOW_LOCAL_REPORT_FALLBACK = os.getenv("ALLOW_LOCAL_REPORT_FALLBACK", "false").strip().lower() in (
+ALLOW_LOCAL_REPORT_FALLBACK = os.getenv("ALLOW_LOCAL_REPORT_FALLBACK", "true").strip().lower() in (
     "1",
     "true",
     "yes",
