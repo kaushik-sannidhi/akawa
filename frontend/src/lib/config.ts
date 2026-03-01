@@ -12,7 +12,20 @@ export function getWsUrl() {
     return process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000";
 }
 
-export function resolveBaseUrl(url: string) {
+export async function resolveBaseUrl(url: string | number): Promise<string> {
+    if (typeof url === "number") {
+        const base = getBaseUrl();
+        try {
+            const parsed = new URL(base);
+            if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+                parsed.port = url.toString();
+            }
+            return parsed.toString().replace(/\/$/, "");
+        } catch {
+            return base;
+        }
+    }
+
     if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("ws://") || url.startsWith("wss://")) {
         return url;
     }
