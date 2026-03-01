@@ -3,8 +3,7 @@
 import { getBaseUrl } from "@/lib/config";
 import { X } from "lucide-react";
 
-const WEAPON_CLASSES = ["gun", "knife", "violence"];
-const FALL_CLASSES = ["fall"];
+const WEAPON_CLASSES = ["gun", "knife"];
 
 export default function AlertSidebar({
     alerts,
@@ -53,21 +52,19 @@ export default function AlertSidebar({
                     ) : (
                         alerts.map((alert, i) => {
                             const isWeapon = WEAPON_CLASSES.includes(alert.class_name);
-                            const isFall = FALL_CLASSES.includes(alert.class_name);
-                            const isHighAlert = isWeapon || isFall;
-                            const borderColor = isHighAlert
+                            const borderColor = isWeapon
                                 ? "border-[var(--color-alert)]"
                                 : "border-[var(--color-iron)]";
-                            const textColor = isHighAlert
+                            const textColor = isWeapon
                                 ? "text-[var(--color-alert)]"
                                 : "text-[var(--color-data)]";
-                            const bgColor = isHighAlert
+                            const bgColor = isWeapon
                                 ? "bg-[var(--color-alert)]/10"
                                 : "bg-[var(--color-dim)]";
 
-                            // Display label: unify weapons, show specific type for violence/fall
-                            const displayLabel = alert.class_name === "violence" ? "VIOLENCE" : isFall ? "FALL" : isWeapon ? "WEAPON" : alert.class_name.toUpperCase();
-                            const displayType = alert.class_name === "violence" ? "[ VIOLENT_INCIDENT ]" : isFall ? "[ MEDICAL_EMERGENCY ]" : isWeapon ? "[ KINETIC_THREAT ]" : "[ SYS_OBJECT ]";
+                            // Display label: unify weapons under "WEAPON"
+                            const displayLabel = isWeapon ? "WEAPON" : alert.class_name.toUpperCase();
+                            const displayType = isWeapon ? "[ KINETIC_THREAT ]" : "[ SYS_OBJECT ]";
 
                             return (
                                 <div

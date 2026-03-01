@@ -339,24 +339,17 @@ async def proxy_fast_vision_batch(
         if resp.status_code != 200:
             return empty
 
-        result = _parse_fast_vision_response(resp.json())
-        per_frame = result.get("per_frame_detections") or {}
-        batch_out = [[] for _ in frames]
+        result      = _parse_fast_vision_response(resp.json())
+        threat_type = result["threat_type"]
+        detections  = result["detections"]
+        batch_out   = [[] for _ in frames]
 
-        # Map detections to their specific frames within the batch (0-19)
-        # We include all detections (persons, etc.) so the timeline is complete.
-        for idx_str, frame_dets in per_frame.items():
-            try:
-                idx = int(idx_str)
-                if 0 <= idx < len(batch_out):
-                    batch_out[idx] = frame_dets
-            except (ValueError, TypeError):
-                continue
-
-        # Fallback: if per_frame is empty but we have global detections, 
-        # attach them to the last frame as a summary.
-        if not per_frame and result.get("detections"):
-            batch_out[-1] = result["detections"]
+        if threat_type != "none":
+            # Attach all threat detections to the last frame for timeline display.
+            # Person bboxes are excluded here — they're not useful on the upload timeline.
+            threat_dets = [d for d in detections if d.get("is_threat")]
+            if threat_dets:
+                batch_out[-1] = threat_dets
 
         return batch_out
     except Exception as e:
@@ -438,8 +431,7 @@ async def proxy_audio_detect(req: AudioRequest, stream_id: str = None):
 
 
 class FastVisionRequest(BaseModel):
-    frame_b64: Optional[str] = None
-    frame_sequence_b64: Optional[List[str]] = None
+    frame_b64: str
     video_name: Optional[str] = "live_stream"
     source_type: Optional[str] = "live"
     stream_id: Optional[str] = "default"
@@ -448,108 +440,18 @@ class FastVisionRequest(BaseModel):
 @app.post("/api/detect")
 async def proxy_fast_vision_detect(req: FastVisionRequest):
     """
-    Single-frame detection proxy → calls FastVisionAPI.analyze with frame_b64.
-    The Modal API has no separate /detect endpoint; 'analyze' handles both
-    frame_b64 (single frame) and frame_sequence_b64 (sequence) paths.
+    Proxy to the lightweight single-frame detection endpoint.
     """
-    import traceback
     try:
-        payload = {
-            "video_name":  req.video_name or "upload",
-            "source_type": req.source_type or "upload",
-            "stream_id":   req.stream_id  or "default",
-        }
-        if req.frame_sequence_b64:
-            payload["frame_sequence_b64"] = req.frame_sequence_b64
-        else:
-            payload["frame_b64"] = req.frame_b64
-
-        logger.info(
-            f"[DETECT] Sending {'sequence' if req.frame_sequence_b64 else 'frame'} to Modal FastVisionAPI.analyze "
-            f"stream={req.stream_id} src={req.source_type}"
-        )
-
+        url = FAST_VISION_URL.replace("/analyze", "/detect")
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(FAST_VISION_URL, json=payload)
+            resp = await client.post(url, json=req.dict())
             resp.raise_for_status()
-            raw = resp.json()
-
-        # ── Detailed logging of what Modal returned ──────────────────────────
-        threat_type       = raw.get("threat_type", "none")
-        weapons_detected  = raw.get("weapons_detected", False)
-        violence_detected = raw.get("violence_detected", False)
-        fall_detected     = raw.get("fall_detected", False)
-        weapon_conf       = raw.get("weapon_confidence", 0.0)
-        violence_conf     = raw.get("violence_confidence", 0.0)
-        fall_conf         = raw.get("fall_confidence", 0.0)
-        raw_detections    = raw.get("detections") or []
-
-        logger.info(
-            f"[DETECT RESULT] stream={req.stream_id} "
-            f"threat={threat_type} "
-            f"weapon={weapons_detected}({weapon_conf:.2f}) "
-            f"violence={violence_detected}({violence_conf:.2f}) "
-            f"fall={fall_detected}({fall_conf:.2f}) "
-            f"num_detections={len(raw_detections)}"
-        )
-        for i, d in enumerate(raw_detections):
-            logger.info(
-                f"  [DET {i}] class={d.get('class_name')} "
-                f"type={d.get('detection_type')} "
-                f"conf={d.get('confidence', 0):.3f} "
-                f"bbox={d.get('bbox')}"
-            )
-
-        parsed = _parse_fast_vision_response(raw)
-
-        # ── Inject violence/fall synthetic detections into detections list ───
-        # The brawl model (sequence-only) cannot run on a single frame, so
-        # PATH B (frame_b64) never sets violence_detected.  We compensate by
-        # injecting a full-frame violent_person marker so the frontend can
-        # still see and alert on the violence_confidence score when it's high.
-        # NOTE: For sequences sent via frame_sequence_b64 this is handled
-        # server-side already; this guard is for single-frame calls only.
-        if violence_detected and violence_conf > 0:
-            has_violent = any(
-                d.get("detection_type") == "violent_person"
-                for d in parsed.get("detections", [])
-            )
-            if not has_violent:
-                parsed.setdefault("detections", []).append({
-                    "class_name":     "violence",
-                    "confidence":     violence_conf,
-                    "bbox":           {"x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0},
-                    "detection_type": "violent_person",
-                    "is_threat":      True,
-                    "is_weapon":      False,
-                })
-
-        # Inject fall synthetic detections if fall_detected and no fall detection exists
-        if fall_detected and fall_conf > 0:
-            has_fall = any(
-                d.get("detection_type") == "fall"
-                for d in parsed.get("detections", [])
-            )
-            if not has_fall:
-                parsed.setdefault("detections", []).append({
-                    "class_name":     "fall",
-                    "confidence":     fall_conf,
-                    "bbox":           {"x1": 0.0, "y1": 0.0, "x2": 1.0, "y2": 1.0},
-                    "detection_type": "fall",
-                    "is_threat":      True,
-                })
-
-        logger.info(
-            f"[DETECT PARSED] detections={len(parsed.get('detections', []))} "
-            f"threat_type={parsed.get('threat_type', 'none')}"
-        )
-        return parsed
-
+            data = resp.json()
+            return _parse_fast_vision_response(data)
     except Exception as e:
         traceback.print_exc()
-        logger.error(f"[DETECT ERROR] {e}")
-        return {"detections": [], "threat_type": "none", "error": str(e)}
-
+        return {"error": str(e)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -768,9 +670,8 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                     batch_timestamps = []
 
             frame_idx += 1
-            # Reduced sleep for faster background analysis
-            if frame_idx % 100 == 0:
-                await anyio.sleep(0.001)
+            if frame_idx % 50 == 0:
+                await anyio.sleep(0.01)
 
         # Flush remaining frames
         if len(batch_frames) >= 2:
