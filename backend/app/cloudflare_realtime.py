@@ -41,7 +41,7 @@ def _calls_base() -> str:
     env = _env()
     return (
         "https://api.cloudflare.com/client/v4/accounts/"
-        f"{env['account_id']}/calls/apps/{env['app_id']}"
+        f"{env['account_id']}/realtime/kit/{env['app_id']}"
     )
 
 
@@ -107,7 +107,7 @@ def create_meeting(title: str) -> Optional[Dict[str, Any]]:
         response = requests.post(
             f"{_calls_base()}/meetings",
             headers=_calls_headers(),
-            json={"name": meeting_name},
+            json={"title": meeting_name},
             timeout=API_TIMEOUT_SECONDS,
         )
         result = _parse_cf_response(response, "create_meeting")
@@ -121,7 +121,7 @@ def create_meeting(title: str) -> Optional[Dict[str, Any]]:
 
         return {
             "meeting_id": meeting_id,
-            "name": result.get("name") or meeting_name,
+            "name": result.get("title") or result.get("name") or meeting_name,
         }
     except Exception as exc:
         logger.error("create_meeting exception: %s", exc)
@@ -165,8 +165,8 @@ def add_participant(
 
     payload = {
         "name": (name or "participant").strip()[:120] or "participant",
-        "clientSpecificId": safe_participant_id,
-        "role": safe_role,
+        "custom_participant_id": safe_participant_id,
+        "preset_name": safe_role, # RealtimeKit uses presets
     }
 
     try:
