@@ -657,11 +657,13 @@ async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous"
 
     video_id   = str(uuid.uuid4())
     safe_name  = "".join(c if c.isalnum() or c in "._-" else "_" for c in file.filename)
-    if not safe_name:
-        safe_name = f"{video_id}.mp4"
+    base_name, ext = os.path.splitext(safe_name)
+    if not ext:
+        ext = ".mp4"
 
     orig_path  = os.path.join(UPLOAD_DIR, f"{video_id}_orig_{safe_name}")
-    final_name = f"{video_id}_{os.path.splitext(safe_name)[0]}.mp4"
+    # Always try to transcode to .mp4 for best browser compatibility
+    final_name = f"{video_id}_{base_name}.mp4"
     final_path = os.path.join(UPLOAD_DIR, final_name)
 
     try:
@@ -675,9 +677,13 @@ async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous"
         await anyio.to_thread.run_sync(_transcode_video, orig_path, final_path)
     except Exception as ffmpeg_exc:
         logger.warning(f"ffmpeg transcode failed, falling back to copy: {ffmpeg_exc}")
-        # Note: OpenCV's mp4v codec produces MPEG-4 Part 2 which browsers
-        # cannot play. A raw copy preserves the original H.264 encoding
-        # which is browser-compatible for .mp4 uploads.
+        
+        # If original was NOT .mp4, preserve the original extension so the 
+        # browser can correctly identify the MIME type during playback.
+        if ext.lower() != ".mp4":
+            final_name = f"{video_id}_{base_name}{ext}"
+            final_path = os.path.join(UPLOAD_DIR, final_name)
+            
         os.replace(orig_path, final_path)
         transcode_mode = "copy"
     finally:
