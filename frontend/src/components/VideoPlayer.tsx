@@ -106,6 +106,17 @@ export default function VideoPlayer({
                                 });
                                 // Keep sorted for binary search later
                                 detectionMapRef.current.sort((a, b) => a.timestamp - b.timestamp);
+
+                                // Fire alerts for threats discovered during pre-analysis
+                                if (data.threat_type && data.threat_type !== "none") {
+                                    const threats = (data.detections || []).filter(
+                                        (d: any) => d.is_threat || WEAPON_CLASSES.includes(d.class_name) || ["weapon", "fall", "violent_person"].includes(d.detection_type)
+                                    );
+                                    if (threats.length > 0) {
+                                        onAlertRef.current(threats, data.timestamp);
+                                        captureClipForAlert(data.timestamp);
+                                    }
+                                }
                             } else if (data.type === "done") {
                                 setAnalyzing(false);
                             }
