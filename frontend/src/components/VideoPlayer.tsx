@@ -54,91 +54,113 @@ export default function VideoPlayer({
         }
     }, [seekTrigger]);
 
-    // === PRE-ANALYSIS: stream all detections from backend before playback ===
+    // === LIVE ANALYSIS LOOP ===
+    const analysisIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
     useEffect(() => {
-        const uid = auth.currentUser?.uid || "anonymous";
-        const abortController = new AbortController();
-        detectionMapRef.current = [];
-        alertsFiredRef.current = new Set();
-        setAnalyzing(true);
-        setProgress(0);
-        setAnalysisStatus("CONNECTING TO ANALYSIS ENGINE...");
-        setVideoError(null);
+        setAnalyzing(false);
+        const videoEl = videoRef.current;
+        if (!videoEl) return;
 
-        const runAnalysis = async () => {
-            try {
-                const resolvedBaseUrl = getBaseUrl();
-                if (!abortController.signal.aborted) {
-                    setBaseUrl(resolvedBaseUrl);
-                }
-                const res = await fetch(
-                    `${resolvedBaseUrl}/api/analyze/${videoId}?uid=${encodeURIComponent(uid)}&model_id=${encodeURIComponent(modelId)}`,
-                    { signal: abortController.signal }
+        const startAnalysis = () => {
+            if (analysisIntervalRef.current) return;
+
+            // Run at ~2 FPS
+            analysisIntervalRef.current = setInterval(async () => {
+                if (!videoEl || videoEl.paused || videoEl.ended) return;
+
+                const currentTime = videoEl.currentTime;
+
+                // Check if we already analyzed within 0.3s of this timestamp to avoid redundant work
+                const alreadyAnalyzed = detectionMapRef.current.some(
+                    (d) => Math.abs(d.timestamp - currentTime) < 0.3
                 );
+                if (alreadyAnalyzed) return;
 
-                if (!res.ok) {
-                    throw new Error(`ANALYSIS_FAILED (HTTP ${res.status})`);
-                }
+                try {
+                    const canvas = document.createElement("canvas");
+                    const ctx = canvas.getContext("2d");
+                    if (!ctx || videoEl.videoWidth === 0) return;
 
-                const reader = res.body?.getReader();
-                if (!reader) return;
-                const decoder = new TextDecoder();
-                let buffer = "";
+                    const videoWidth = videoEl.videoWidth;
+                    const videoHeight = videoEl.videoHeight;
+                    const targetWidth = 480;
+                    const targetHeight = Math.max(1, Math.round((targetWidth / videoWidth) * videoHeight));
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
+                    canvas.width = targetWidth;
+                    canvas.height = targetHeight;
+                    ctx.drawImage(videoEl, 0, 0, targetWidth, targetHeight);
 
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split("\n");
-                    buffer = lines.pop() || "";
+                    const blob = await new Promise<Blob | null>((resolve) => {
+                        canvas.toBlob((b) => resolve(b), "image/jpeg", 0.6);
+                    });
+                    if (!blob) return;
 
-                    for (const line of lines) {
-                        if (!line.startsWith("data: ")) continue;
-                        try {
-                            const payload = JSON.parse(line.slice(6));
-                            if (!payload) continue;
+                    const buffer = await blob.arrayBuffer();
+                    const b64Str = btoa(new Uint8Array(buffer).reduce((acc, byte) => acc + String.fromCharCode(byte), ""));
 
-                            if (payload.type === "start") {
-                                setAnalysisStatus(`ANALYZING ${payload.total_samples} FRAMES...`);
-                            } else if (payload.type === "frame") {
-                                detectionMapRef.current.push({
-                                    timestamp: payload.timestamp,
-                                    detections: payload.detections,
-                                });
-                                setProgress(payload.progress);
+                    const payload = {
+                        frame_b64: b64Str,
+                        video_name: `upload_${videoId}`,
+                        source_type: "upload",
+                        stream_id: `upload_${videoId}`,
+                    };
 
-                                // Fire alerts for threats found during analysis
-                                const threats = payload.detections.filter(
-                                    (d: any) => d.is_threat || WEAPON_CLASSES.includes(d.class_name) || ["weapon", "fall", "violent_person"].includes(d.detection_type)
-                                );
-                                if (threats.length > 0) {
-                                    onAlertRef.current(threats, payload.timestamp);
-                                    captureClipForAlert(payload.timestamp);
-                                }
+                    const resolvedBaseUrl = getBaseUrl();
+                    const res = await fetch(`${resolvedBaseUrl}/api/detect`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload)
+                    });
 
-                                const pct = Math.round(payload.progress * 100);
-                                setAnalysisStatus(`ANALYZING... ${pct}%`);
-                            } else if (payload.type === "done") {
-                                setAnalysisStatus(`ANALYSIS COMPLETE (${payload.total_analyzed} FRAMES)`);
-                            }
-                        } catch { }
+                    if (!res.ok) return;
+
+                    const data = await res.json();
+                    const detections = data.detections || [];
+
+                    // Save detections for playback rendering
+                    detectionMapRef.current.push({
+                        timestamp: currentTime,
+                        detections: detections
+                    });
+
+                    // Keep sorted for binary search
+                    detectionMapRef.current.sort((a, b) => a.timestamp - b.timestamp);
+
+                    // Check for threats using the same threshold/logic as before
+                    const threats = detections.filter(
+                        (d: any) => d.is_threat || WEAPON_CLASSES.includes(d.class_name) || ["weapon", "fall", "violent_person"].includes(d.detection_type)
+                    );
+
+                    if (threats.length > 0) {
+                        onAlertRef.current(threats, currentTime);
+                        captureClipForAlert(currentTime);
                     }
+                } catch (err) {
+                    // Fail silently for isolated frame errors to keep playback smooth
+                    console.error("Live analysis frame drop:", err);
                 }
-            } catch (e: any) {
-                if (e.name !== "AbortError") {
-                    console.error("Analysis stream error:", e);
-                    setAnalysisStatus("ANALYSIS ERROR — RETRY UPLOAD");
-                    setVideoError("FORENSIC ANALYSIS ENGINE FAILED TO INITIALIZE. PLEASE RE-UPLOAD.");
-                }
-            } finally {
-                setAnalyzing(false);
+            }, 500);
+        };
+
+        const stopAnalysis = () => {
+            if (analysisIntervalRef.current) {
+                clearInterval(analysisIntervalRef.current);
+                analysisIntervalRef.current = null;
             }
         };
 
-        runAnalysis();
-        return () => abortController.abort();
-    }, [videoId, modelId]);
+        videoEl.addEventListener("play", startAnalysis);
+        videoEl.addEventListener("pause", stopAnalysis);
+        videoEl.addEventListener("ended", stopAnalysis);
+
+        return () => {
+            stopAnalysis();
+            videoEl.removeEventListener("play", startAnalysis);
+            videoEl.removeEventListener("pause", stopAnalysis);
+            videoEl.removeEventListener("ended", stopAnalysis);
+        };
+    }, [videoId]);
 
     // Track recently captured clip timestamps to prevent overlapping captures
     const lastClipTimeRef = useRef<number>(-10); // initialized far past

@@ -58,7 +58,7 @@ export default function DashboardOverview() {
           </div>
         </Link>
 
-        <Link href="/dashboard/reports" className="border-[2px] border-[var(--color-iron)] bg-black p-6 hover:bg-[#ffd600] hover:border-[#ffd600] transition-none group cursor-crosshair flex flex-col relative overflow-hidden text-[var(--color-data)] hover:text-black">
+        <Link href="/dashboard/reports" className="border-[2px] border-[var(--color-iron)] bg-black p-6 hover:bg-[var(--color-alert)] hover:border-[var(--color-alert)] transition-none group cursor-crosshair flex flex-col relative overflow-hidden text-[var(--color-data)] hover:text-black">
           <div className="flex justify-between items-start mb-auto relative z-10 w-full">
             <span className="font-bold border-b border-current pb-1 uppercase tracking-widest">[ INCIDENT_ARCHIVE ]</span>
           </div>

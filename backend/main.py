@@ -555,20 +555,9 @@ async def upload_video(file: UploadFile = File(...), uid: str = Form("anonymous"
     try:
         await anyio.to_thread.run_sync(_transcode_video, orig_path, final_path)
     except Exception as ffmpeg_exc:
-        logger.warning(f"ffmpeg transcode failed, trying OpenCV fallback: {ffmpeg_exc}")
-        try:
-            await anyio.to_thread.run_sync(_transcode_video_opencv, orig_path, final_path)
-            transcode_mode = "opencv"
-        except Exception as cv_exc:
-            logger.error(f"OpenCV transcode fallback failed: {cv_exc}")
-            if safe_name.lower().endswith(".mp4"):
-                os.replace(orig_path, final_path)
-                transcode_mode = "copy"
-            else:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"INGESTION_FAILED: could not transcode upload ({ffmpeg_exc}) / ({cv_exc})",
-                )
+        logger.warning(f"ffmpeg transcode failed, falling back to copy: {ffmpeg_exc}")
+        os.replace(orig_path, final_path)
+        transcode_mode = "copy"
     finally:
         if os.path.exists(final_path) and os.path.exists(orig_path):
             try:
