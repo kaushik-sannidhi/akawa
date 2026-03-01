@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import uuid
 import cv2
@@ -8,6 +9,7 @@ from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, F
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import json
+import asyncio
 import base64
 import numpy as np
 from pydantic import BaseModel, Field
@@ -217,7 +219,7 @@ def _is_recently_deleted(stream_id: str) -> bool:
     return True
 
 
-def _restore_streams_from_firebase(uid_filter: str | None = None):
+def _restore_streams_from_firebase(uid_filter: Optional[str] = None):
     try:
         resp = requests.get(f"{FIREBASE_RTDB_BASE}/streams.json", timeout=6)
         if resp.status_code != 200:
@@ -777,15 +779,16 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                         dets = batch_detections[i]
 
                         progress = sample_count / max(total_samples, 1)
-                        yield f"data: {json.dumps({
-                            'type': 'frame', 
-                            'timestamp': ts, 
-                            'detections': dets, 
-                            'threat_type': batch_threat_type, 
-                            'weapon_confidence': batch_weapon_conf,
-                            'violence_confidence': batch_violence_conf,
-                            'progress': round(min(progress, 1.0), 3)
-                        })}\n\n"
+                        payload = {
+                            "type": "frame",
+                            "timestamp": ts,
+                            "detections": dets,
+                            "threat_type": batch_threat_type,
+                            "weapon_confidence": batch_weapon_conf,
+                            "violence_confidence": batch_violence_conf,
+                            "progress": round(min(progress, 1.0), 3)
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
 
                     batch_frames     = []
                     batch_timestamps = []
@@ -806,15 +809,16 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
                 sample_count += 1
                 dets = batch_detections[i] if i < len(batch_detections) else []
                 progress = sample_count / max(total_samples, 1)
-                yield f"data: {json.dumps({
-                    'type': 'frame', 
-                    'timestamp': ts, 
-                    'detections': dets, 
-                    'threat_type': batch_threat_type,
-                    'weapon_confidence': batch_weapon_conf,
-                    'violence_confidence': batch_violence_conf,
-                    'progress': round(min(progress, 1.0), 3)
-                })}\n\n"
+                payload = {
+                    "type": "frame",
+                    "timestamp": ts,
+                    "detections": dets,
+                    "threat_type": batch_threat_type,
+                    "weapon_confidence": batch_weapon_conf,
+                    "violence_confidence": batch_violence_conf,
+                    "progress": round(min(progress, 1.0), 3)
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
 
         await anyio.to_thread.run_sync(cap.release)
         yield f"data: {json.dumps({'type': 'done', 'total_analyzed': sample_count})}\n\n"
