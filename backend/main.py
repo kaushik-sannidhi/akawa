@@ -882,7 +882,7 @@ async def analyze_video(video_id: str, uid: str = "anonymous", model_id: str = "
             "X-Accel-Buffering": "no",
         },
     )
-    )
+
 
 
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
