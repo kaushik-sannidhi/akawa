@@ -13,6 +13,7 @@ import modal
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 import math
+import collections
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Modal App
@@ -297,6 +298,49 @@ def _compute_optical_flow(prev_gray, curr_gray):
     return flow
 
 
+LABEL_HISTORY_WINDOW = 15
+
+def get_smoothed_label(state, track_id, current_label, current_conf):
+    import collections
+    track_locked_labels = state.get("weapon_locked_labels", {})
+    track_label_history = state.get("weapon_label_history", collections.defaultdict(list))
+    if track_id in track_locked_labels:
+        return track_locked_labels[track_id]
+    # Lock "Gun" at 0.45 threshold
+    if current_label == "Gun" and current_conf > 0.45:
+        track_locked_labels[track_id] = "Gun"
+        state["weapon_locked_labels"] = track_locked_labels
+        return "Gun"
+    history = track_label_history[track_id]
+    history.append((current_label, current_conf))
+    
+    if len(history) > LABEL_HISTORY_WINDOW:
+        track_label_history[track_id] = history[-LABEL_HISTORY_WINDOW:]
+        history = track_label_history[track_id]
+        
+    scores = collections.defaultdict(float)
+    for label, conf in history:
+        # Gun votes get 2.5x weight against knife
+        weight = conf * (2.5 if label == "Gun" else 1.0)
+        scores[label] += weight
+        
+    state["weapon_label_history"] = track_label_history
+    return max(scores, key=scores.get)
+
+def cleanup_stale_tracks(state, active_track_ids):
+    import collections
+    track_locked_labels = state.get("weapon_locked_labels", {})
+    track_label_history = state.get("weapon_label_history", collections.defaultdict(list))
+    
+    stale = [tid for tid in track_label_history if tid not in active_track_ids]
+    for tid in stale:
+        del track_label_history[tid]
+        if tid in track_locked_labels:
+            del track_locked_labels[tid]
+    state["weapon_label_history"] = track_label_history
+    state["weapon_locked_labels"] = track_locked_labels
+
+
 @app.cls(
     image=fast_vision_image,
     gpu="A100",
@@ -357,6 +401,8 @@ class FastVisionAPI:
             self._stream_state[stream_id] = {
                 "prev_gray": None,
                 "tracker": EventTracker(max_age=10),
+                "weapon_locked_labels": {},
+                "weapon_label_history": collections.defaultdict(list),
             }
         return self._stream_state[stream_id]
 
@@ -395,45 +441,56 @@ class FastVisionAPI:
         return False, 0.0
 
     # ── Shared weapon scanning ───────────────────────────────────────────────
-    def _scan_weapons(self, frames, frame_height: int, frame_width: int):
+    def _scan_weapons(self, frames, frame_height: int, frame_width: int, state: dict):
         """
-        Run weapon YOLO on every other frame.
+        Run weapon YOLO on every other frame with BoT-SORT tracking.
         Returns (max_weapon_conf, weapon_hit_ratio, weapon_detections[], per_frame_weapon_dets).
-        weapon_detections contains normalised Detection objects for the frames
-        where a weapon was found.
-        per_frame_weapon_dets is a dict {frame_idx: [Detection]}
         """
         import numpy as np
-
-        class_names = (self.weapon_model.names
-                       if hasattr(self.weapon_model, "names")
-                       else getattr(self.weapon_model.model, "names",
-                                    {0: "person", 1: "gun", 2: "knife"}))
 
         weapon_confidences = []
         weapon_detections  = []
         per_frame_weapon_dets = {}
         scanned = 0
+        active_ids = set()
 
         for i, frame in enumerate(frames):
             if i % 2 != 0:
                 continue
             scanned += 1
             h, w = frame.shape[:2]
-            results = self.weapon_model(frame, verbose=False)
+            
+            # Use BoT-SORT tracking
+            results = self.weapon_model.track(
+                source=frame, 
+                persist=True, 
+                tracker="botsort.yaml", 
+                conf=WEAPON_CONF_THRESH, 
+                classes=[1, 2], 
+                verbose=False
+            )
+            
             frame_dets = []
             for r in results:
+                if r.boxes is None:
+                    continue
                 for j in range(len(r.boxes)):
-                    cls_id    = int(r.boxes.cls[j].item())
-                    conf      = float(r.boxes.conf[j].item())
-                    class_name = (class_names[cls_id]
-                                  if isinstance(class_names, dict)
-                                  else (class_names[cls_id]
-                                        if cls_id < len(class_names)
-                                        else f"class_{cls_id}"))
-                    is_weapon = class_name in WEAPON_CLASSES
-                    if not is_weapon or conf < WEAPON_CONF_THRESH:
-                        continue
+                    cls_id = int(r.boxes.cls[j].item())
+                    conf = float(r.boxes.conf[j].item())
+                    # Map: 1 -> Gun, others -> Knife
+                    raw_label = "Gun" if cls_id == 1 else "Knife"
+                    
+                    # Extract track ID
+                    track_id = None
+                    if r.boxes.id is not None:
+                        track_id = int(r.boxes.id[j].item())
+                        active_ids.add(track_id)
+                    
+                    # Apply smoothing if we have a track ID
+                    if track_id is not None:
+                        final_label = get_smoothed_label(state, track_id, raw_label, conf)
+                    else:
+                        final_label = raw_label
 
                     weapon_confidences.append(conf)
 
@@ -447,7 +504,7 @@ class FastVisionAPI:
                     det = Detection(
                         bbox=xyxyn,
                         confidence=conf,
-                        class_name=class_name,
+                        class_name=final_label,
                         detection_type="weapon",
                     )
                     weapon_detections.append(det)
@@ -455,6 +512,9 @@ class FastVisionAPI:
             
             if frame_dets:
                 per_frame_weapon_dets[i] = frame_dets
+
+        # Cleanup stale tracks after finishing the sequence
+        cleanup_stale_tracks(state, active_ids)
 
         max_conf  = max(weapon_confidences) if weapon_confidences else 0.0
         hit_ratio = len(weapon_confidences) / max(scanned, 1)
@@ -574,7 +634,7 @@ class FastVisionAPI:
                 # we skip the brawl model entirely — fast motion from wielding
                 # a weapon is indistinguishable from a brawl to the CNN.
                 max_weapon_conf, weapon_hit_ratio, weapon_detections, per_frame_weapon_dets = \
-                    self._scan_weapons(frames, *frames[0].shape[:2])
+                    self._scan_weapons(frames, *frames[0].shape[:2], state)
 
                 weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
                 weapon_dominant  = weapon_hit_ratio >= WEAPON_DOMINANCE_RATIO
@@ -723,7 +783,7 @@ class FastVisionAPI:
                     )
 
                 max_weapon_conf, _, weapon_detections, _ = \
-                    self._scan_weapons([frame], *frame.shape[:2])
+                    self._scan_weapons([frame], *frame.shape[:2], state)
                 weapons_detected = max_weapon_conf >= WEAPON_ALERT_THRESH
 
                 fall_detected, max_fall_conf, person_detections, fall_detections = \

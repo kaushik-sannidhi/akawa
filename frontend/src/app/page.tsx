@@ -372,8 +372,8 @@ export default function LandingPage() {
 
                         <div className="relative z-10 mix-blend-difference animate-slide-in-bottom">
                             <h1 className="text-[2.8rem] sm:text-7xl md:text-8xl lg:text-[7rem] xl:text-[9rem] font-bold leading-[0.9] mb-8 text-[var(--color-data)] tracking-tighter overflow-hidden animate-float-subtle-large break-all sm:break-normal">
-                                <ScrambleText text="ABSOLUTE" delay={500} /><br />
-                                <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="VIGILANCE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
+                                <ScrambleText text="SENTIENT" delay={500} /><br />
+                                <span className="text-[var(--color-alert)] mix-blend-screen"><ScrambleText text="DEFENSE" delay={1000} /></span><span className="text-[var(--color-alert)] animate-pulse">_</span>
                             </h1>
 
                             <div className="max-w-2xl font-mono text-xs sm:text-sm leading-relaxed mt-10 mb-10 border-[1px] border-[var(--color-iron)] bg-[var(--color-void)] p-4 shadow-[4px_4px_0px_var(--color-iron)] hover:border-[var(--color-data)] hover:shadow-[4px_4px_0px_var(--color-data)] transition-colors animate-slide-in-bottom stagger-1 z-10 relative cursor-crosshair">
@@ -382,7 +382,7 @@ export default function LandingPage() {
                                     <span className="hidden sm:inline-block animate-pulse text-[var(--color-alert)]">SYS_READY</span>
                                 </div>
                                 <p className="text-[var(--color-silica)] uppercase">
-                                    An advanced AI-driven threat detection system. Leveraging edge-optimized Computer Vision to identify firearms, aggressive kinetic behaviors, and medical emergencies instantly. Removing the human bottleneck from live surveillance.
+                                    AN ADVANCED AI-DRIVEN THREAT DETECTION SYSTEM. LEVERAGING EDGE-OPTIMIZED COMPUTER VISION TO IDENTIFY FIREARMS, AGGRESSIVE KINETIC BEHAVIORS, AND MEDICAL EMERGENCIES INSTANTLY. REMOVING THE HUMAN BOTTLENECK FROM LIVE SURVEILLANCE.
                                 </p>
                             </div>
 
@@ -456,6 +456,16 @@ export default function LandingPage() {
 
                     <div className="aspect-video sm:aspect-[21/9] min-h-[300px] md:min-h-[500px] w-full bg-[#050505] relative overflow-hidden flex items-center justify-center p-8">
                         <div className="absolute inset-0 bg-[linear-gradient(rgba(51,51,51,0.8)_1px,transparent_1px),linear-gradient(90deg,rgba(51,51,51,0.8)_1px,transparent_1px)] bg-[size:60px_60px] z-0 opacity-40" />
+
+                        {/* Image sized exactly to the inner frame border */}
+                        <div className="absolute inset-4 md:inset-8 z-0 overflow-hidden">
+                            <img
+                                src="/perimeter_surveillance.png"
+                                alt="Perimeter Surveillance Feed"
+                                className="w-full h-full object-cover opacity-60 grayscale mix-blend-screen pointer-events-none"
+                            />
+                        </div>
+
                         <div className="absolute inset-0 terminal-overlay z-20 pointer-events-none mix-blend-overlay" />
 
                         <div className="absolute inset-4 md:inset-8 border-[2px] border-[var(--color-iron)] z-10 flex flex-col justify-between pointer-events-none">
